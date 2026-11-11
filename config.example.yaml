@@ -211,6 +211,15 @@ traffic:
   closures_poll_minutes: 20     # work-zone full closures (WZDx): 3 requests/hour
   max_requests_per_hour: 40     # hard cap, kept on disk across restarts
 
+# Email each briefing (compressed audio + transcript) after it plays.
+# SMTP server settings go in .env: SMTP_HOST, SMTP_PORT, SMTP_USERNAME,
+# SMTP_PASSWORD, SMTP_FROM (SMTP_SSL=1 for port 465).
+email_reports:
+  enabled: false
+  to: [you@example.com]
+  broadcasts: [hourly]        # which broadcasts to send
+  format: m4a                 # m4a (~0.5 MB, AAC 64k mono) or wav (~6 MB)
+
 # Apple Home / Siri: Jarvis appears in the Home app as a switch. "Hey Siri,
 # turn on Jarvis Update" runs the briefing immediately (it switches itself off).
 # Pairing code is logged on first start (or set pincode: "123-45-678").

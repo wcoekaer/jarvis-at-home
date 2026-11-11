@@ -1316,7 +1316,7 @@ def prepare_broadcast(b: dict, cfg: dict, when: dt.datetime, workdir: Path,
 async def run_broadcast(b: dict, cfg: dict, when: dt.datetime, play_audio: bool = True) -> None:
     lead = int(cfg["playback"].get("prepare_seconds", 180))
     with tempfile.TemporaryDirectory(prefix="jarvis-") as tmp:
-        _, audio = await asyncio.to_thread(prepare_broadcast, b, cfg, when, Path(tmp), play_audio)
+        text, audio = await asyncio.to_thread(prepare_broadcast, b, cfg, when, Path(tmp), play_audio)
         if not play_audio:
             keep = BASE_DIR / ("last-%s.wav" % b["name"])
             shutil.copy(audio, keep)
@@ -1329,6 +1329,52 @@ async def run_broadcast(b: dict, cfg: dict, when: dt.datetime, play_audio: bool 
         volume = b.get("volume", cfg["playback"].get("volume"))
         ok = await play(audio, b["homepods"], volume)
         log.info("[%s] broadcast %s", b["name"], "complete" if ok else "had errors")
+        # Email a copy before the temporary audio is deleted.
+        ecfg = cfg.get("email_reports") or {}
+        if ecfg.get("enabled") and b["name"] in ecfg.get("broadcasts", [b["name"]]):
+            try:
+                await asyncio.to_thread(email_report, ecfg, b["name"], when, text, audio, Path(tmp))
+            except Exception as e:  # never let email trouble affect briefings
+                log.warning("[%s] email failed: %s", b["name"], e)
+
+
+def email_report(ecfg: dict, name: str, when: dt.datetime, text: str, wav: Path, workdir: Path) -> None:
+    """Send the briefing (compressed audio + transcript) by SMTP.
+    Server settings come from .env: SMTP_HOST, SMTP_PORT (587), SMTP_USERNAME,
+    SMTP_PASSWORD, SMTP_FROM; SMTP_SSL=1 for implicit TLS (port 465)."""
+    import smtplib
+    from email.message import EmailMessage
+
+    host = os.environ.get("SMTP_HOST")
+    if not host:
+        raise RuntimeError("SMTP_HOST not set in .env")
+    fmt = ecfg.get("format", "m4a")
+    attach = wav
+    if fmt == "m4a":
+        attach = workdir / "report.m4a"
+        ffmpeg = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+        subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-i", str(wav), "-c:a", "aac", "-b:a", "64k",
+                        "-ac", "1", str(attach)], check=True)
+    stamp = when.strftime("%Y-%m-%d %H:%M")
+    msg = EmailMessage()
+    msg["Subject"] = ecfg.get("subject", "Jarvis {name} briefing, {stamp}").format(name=name, stamp=stamp)
+    msg["From"] = os.environ.get("SMTP_FROM") or os.environ.get("SMTP_USERNAME", "")
+    msg["To"] = ", ".join(ecfg["to"])
+    msg.set_content("Jarvis %s briefing, %s\n\n%s\n" % (name, stamp, text))
+    subtype = "mp4" if fmt == "m4a" else "wav"
+    msg.add_attachment(attach.read_bytes(), maintype="audio", subtype=subtype,
+                       filename="jarvis-%s-%s.%s" % (name, when.strftime("%Y%m%d-%H%M"), attach.suffix[1:]))
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    if os.environ.get("SMTP_SSL") == "1" or port == 465:
+        server = smtplib.SMTP_SSL(host, port, timeout=60)
+    else:
+        server = smtplib.SMTP(host, port, timeout=60)
+        server.starttls()
+    with server:
+        if os.environ.get("SMTP_USERNAME"):
+            server.login(os.environ["SMTP_USERNAME"], os.environ.get("SMTP_PASSWORD", ""))
+        server.send_message(msg)
+    log.info("[%s] emailed to %s (%d KB)", name, msg["To"], attach.stat().st_size // 1024)
 
 
 # --------------------------------------------------------------------------- real-time alerts
