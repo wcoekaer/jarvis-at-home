@@ -729,13 +729,24 @@ class UnifiTracker:
                 self.low_batt.pop(dev_id, None)
         for kind in ("smokeAlarmTriggeredAt", "coAlarmTriggeredAt", "leakDetectedAt",
                      "alarmTriggeredAt", "tamperingDetectedAt"):
-            if body.get(kind) and dev_id:
-                key = "%s %s" % (dev_id, kind)
-                if key not in self.alarms:
-                    events.append({"kind": "alarm", "device": dev_id,
-                                   "device_name": self.names.get(dev_id, "a sensor"),
-                                   "detail": ALARM_NAMES[kind]})
-                self.alarms[key] = now.isoformat()
+            # These fields hold the time of the LAST occurrence and keep being sent
+            # long after it cleared, so only a new, recent timestamp is an event.
+            stamp = body.get(kind)
+            if not stamp or not dev_id:
+                continue
+            try:
+                when = dt.datetime.fromtimestamp(float(stamp) / 1000) if isinstance(stamp, (int, float)) \
+                    else dt.datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            key = "%s %s" % (dev_id, kind)
+            seen_before = self.alarms.get(key)
+            self.alarms[key] = when.isoformat()
+            recent = dt.timedelta(minutes=float(self.cfg.get("alarm_recent_minutes", 10)))
+            if when.isoformat() != seen_before and abs(now - when) <= recent:
+                events.append({"kind": "tamper" if kind == "tamperingDetectedAt" else "alarm", "device": dev_id,
+                               "device_name": self.names.get(dev_id, "an unnamed sensor"),
+                               "detail": ALARM_NAMES[kind]})
 
         types = body.get("smartDetectTypes")
         if model == "event" or body.get("type") in ("smartDetectZone", "ring", "smartDetectLine"):
@@ -772,7 +783,7 @@ class UnifiTracker:
         # prune old detections and alarms
         cutoff = (now - dt.timedelta(hours=24)).isoformat()
         self.detections = {k: v for k, v in self.detections.items() if v[0] >= cutoff}
-        self.alarms = {k: v for k, v in self.alarms.items() if v >= cutoff}
+        self.alarms = {k: v for k, v in self.alarms.items() if v >= cutoff}  # remembers last-seen stamps
 
         for key, (label, state) in self.wan_states().items():
             before = wan_before.get(key)
@@ -808,8 +819,8 @@ class UnifiTracker:
             t = dt.datetime.fromisoformat(when)
             if start_dt <= t <= end_dt:
                 dev, kind = key.split(" ", 1)
-                lines.append("- ALARM %s on %s at %s" % (ALARM_NAMES.get(kind, kind), self.names.get(dev, dev[-4:]),
-                                                         t.strftime("%-I:%M %p")))
+                label = "Sensor tampering" if kind == "tamperingDetectedAt" else "ALARM " + ALARM_NAMES.get(kind, kind)
+                lines.append("- %s on %s at %s" % (label, self.names.get(dev, dev[-4:]), t.strftime("%-I:%M %p")))
         header = "Overnight %s to %s:" % (start_dt.strftime("%-I:%M %p"), end_dt.strftime("%-I:%M %p"))
         return header + "\n" + ("\n".join(lines) if lines else "- nothing recorded: no people detected, no outages, no alarms")
 
@@ -828,10 +839,14 @@ class UnifiTracker:
                 lines.append("- UniFi recorder %s storage problem: %s" % (console[-4:], prob))
         for dev in self.low_batt:
             lines.append("- UniFi sensor battery low: %s" % self.names.get(dev, "sensor " + dev[-4:]))
+        show = dt.timedelta(minutes=float(self.cfg.get("alarm_show_minutes", 60)))
         for key, when in self.alarms.items():
+            t = dt.datetime.fromisoformat(when)
+            if now - t > show:
+                continue  # old occurrence: the sensor still reports its time, but it has cleared
             dev, kind = key.split(" ", 1)
-            lines.append("- ALARM: %s on %s at %s" % (kind.replace("At", ""), self.names.get(dev, dev[-4:]),
-                                                     dt.datetime.fromisoformat(when).strftime("%-I:%M %p")))
+            label = "Sensor tampering" if kind == "tamperingDetectedAt" else "ALARM: " + ALARM_NAMES.get(kind, kind)
+            lines.append("- %s on %s at %s" % (label, self.names.get(dev, dev[-4:]), t.strftime("%-I:%M %p")))
         window = now - dt.timedelta(minutes=int(self.cfg.get("detection_window_minutes", 30)))
         counts: Dict[str, int] = {}
         for when, types, cam in self.detections.values():

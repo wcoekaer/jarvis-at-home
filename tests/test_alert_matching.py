@@ -44,5 +44,26 @@ class ReadingRanges(unittest.TestCase):
         self.assertEqual(states, [["high"], [], ["ok"], ["low"], ["ok"]])
 
 
+class UnifiAlarmTimestamps(unittest.TestCase):
+    """UniFi sensors keep sending the time of their LAST tampering/alarm.
+    Regression: an old, cleared tampering re-alerted (urgently) every time it was re-seen."""
+
+    def test_only_fresh_timestamps_alert(self):
+        import json
+        cfg = jarvis.load_config(ROOT / "config.example.yaml")
+        u = jarvis.UnifiTracker(cfg["mqtt"]["unifi"])
+        now = dt.datetime(2026, 11, 11, 15, 0)
+        msg = lambda when: json.dumps({"header": {"modelKey": "sensor", "id": "s1"},
+                                       "payload": {"tamperingDetectedAt": int(when.timestamp() * 1000)}})
+        topic = "/unifi/protect/x/telemetry"
+        old, fresh = now - dt.timedelta(hours=5), now - dt.timedelta(seconds=30)
+        self.assertEqual(u.handle(topic, msg(old), now), [])
+        self.assertEqual(u.handle(topic, msg(old), now), [])
+        self.assertEqual([e["kind"] for e in u.handle(topic, msg(fresh), now)], ["tamper"])
+        self.assertEqual(u.handle(topic, msg(fresh), now), [])
+        self.assertTrue(any("tampering" in l for l in u.summary(now)))
+        self.assertFalse(any("tampering" in l for l in u.summary(now + dt.timedelta(hours=2))))
+
+
 if __name__ == "__main__":
     unittest.main()

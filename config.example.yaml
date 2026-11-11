@@ -503,6 +503,12 @@ alerts:
   #   texts: [unlocked]
   #   hours: {from: "22:00", to: "06:00"}
   #   messages: ["Pardon me, sir. The {accessory} has just been unlocked."]
+  # Tampering is reported on the usual speakers, not as an all-speaker emergency.
+  - name: tamper
+    kind: tamper
+    cooldown_minutes: 30
+    messages:
+      - "Pardon the interruption. The {device} sensor reports tampering."
   - name: alarm
     urgent: true               # plays even in quiet mode
     kind: alarm
@@ -510,7 +516,7 @@ alerts:
     homepods: [BasementHP, PrimaryHP, LivingHP, Kitchen, OfficeHP, MudRoom, GarageHPMax, Primary Bathroom]
     volume: 80
     messages:
-      - "Urgent: the {device} reports a {detail}. Please check immediately."
+      - "Urgent: {device} reports a {detail}. Please check immediately."
 
 # Default prompt, used by every broadcast that doesn't define its own.
 # Placeholders: {date} {time} {weekday} {part_of_day} {location}
