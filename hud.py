@@ -159,6 +159,12 @@ def build_status(j, cfg: dict, now: Optional[dt.datetime] = None) -> dict:
                "rain": first(r, "Rain today"), "uv": first(r, "UV index")}
         out = {k: (round(_num(v)) if k in ("temp", "feels", "humidity", "wind", "gust") and _num(v) is not None
                    else v) for k, v in out.items()}
+        wine_t = _num(first(r, "Wine room temperature"))
+        if wine_t is not None:
+            spec = next((x for x in (j.MQTT.cfg.get("topics", []) if j.MQTT else [])
+                         if x.get("label") == "Wine room temperature"), {})
+            out["wine"] = {"temp": round(wine_t), "humidity": _num(first(r, "Wine room humidity")),
+                           "low": spec.get("alert_below"), "high": spec.get("alert_above")}
         feeds = getattr(j, "FEEDS", {}) or {}
         air = feeds.get("outdoor_air")
         if air and air.state.get("current"):

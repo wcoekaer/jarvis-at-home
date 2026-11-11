@@ -146,6 +146,11 @@ mqtt:
     - {topic: http_weatherflow, field: fields.obs_0_sea_level_pressure, decimals: 0, label: Pressure, unit: hPa, max_age_minutes: 90}
     - {topic: http_weatherflow, field: fields.obs_0_lightning_strike_count_last_1hr, decimals: 0, label: Lightning strikes in the last hour, max_age_minutes: 90}
     - {topic: http_weatherflow, field: fields.obs_0_lightning_strike_last_distance, scale: 0.6214, decimals: 0, label: Last lightning strike distance, unit: miles, max_age_minutes: 90}
+    # Wine room: UniFi USL Environmental "Wineroom Environmental" (MAC AA:BB:CC:00:00:10).
+    # Alerts when the temperature leaves the alert_below..alert_above range (°F).
+    - {topic: /unifi/protect/AABBCC000010/temperature, scale: 1.8, offset: 32, decimals: 0, label: Wine room temperature, unit: F, max_age_minutes: 60,
+       alert_above: 65, alert_below: 50}
+    - {topic: /unifi/protect/AABBCC000010/humidity, decimals: 0, label: Wine room humidity, unit: "%", max_age_minutes: 60}
     # Apple Home accessories, via the JarvisHome bridge (homekit/<home>/<room>/<accessory>/<characteristic>).
     # ~1,200 values are published; only the useful ones are given to the model.
     - {topic: "homekit/MyHome/+/+/+", field: text, label: "HomeKit lock", topic_label_parts: 2, max_age_minutes: 1440,
@@ -400,6 +405,19 @@ alerts:
     cooldown_minutes: 10
     messages:
       - "Road closure in San Mateo County: {text}. About {distance} from home. Data provided by 511.org."
+  # Out-of-range readings (topics with alert_above / alert_below), e.g. the wine room.
+  - name: reading-out-of-range
+    kind: reading_alert
+    texts: [high, low]
+    cooldown_minutes: 0
+    messages:
+      - "Pardon the interruption. The {label} is {value}, outside its range of {range}."
+  - name: reading-back-in-range
+    kind: reading_alert
+    texts: [ok]
+    cooldown_minutes: 0
+    messages:
+      - "The {label} is back within range, at {value}."
   # Drones picked up by the house Remote ID sensor (see airspace:)
   - name: drone
     kind: drone
@@ -581,7 +599,9 @@ prompt: |
      WAN port that is OFFLINE (link lost),
      any ALARM or HomeKit SAFETY line, any recorder storage problem, and a
      Starlink Outage or Degraded sensor that is open (open means the flag is
-     on). Also always mention any drone in the drones section that an earlier
+     on). Always mention the wine room temperature if it is above 65 or
+     below 50 degrees Fahrenheit, and give it once in the first update of
+     the day. Also always mention any drone in the drones section that an earlier
      briefing has not already covered (model and roughly where), and the drone
      sensor if it is offline; say nothing about drones otherwise.
      Traffic: mention any accident or road closure in the traffic section that

@@ -456,6 +456,7 @@ class MqttState:
             if self.energy and msg.topic == self.energy_topic and reachable and 0 <= now.timestamp() - observed <= 900:
                 self.energy.update(payload, now)
                 events = events + self.energy.check_thresholds(payload)
+            events = events + self.check_ranges(msg.topic, payload)
         for ev in events:
             # HomeKit changes are frequent; the alerter logs the ones it acts on.
             (log.debug if ev["kind"] == "homekit" else log.info)("event: %s", ev)
@@ -479,6 +480,41 @@ class MqttState:
                 if not is_error:
                     self.values.pop(status_key, None)
         self._save()
+
+    def check_ranges(self, topic: str, payload: str) -> List[dict]:
+        """Topic specs with alert_above / alert_below (in the spec's display units,
+        after scale/offset) raise one 'reading_alert' event when the value leaves
+        the range and one when it comes back (alert_hysteresis, default 1)."""
+        out: List[dict] = []
+        states = self.__dict__.setdefault("range_state", {})
+        for spec in self.cfg.get("topics", []):
+            hi, lo = spec.get("alert_above"), spec.get("alert_below")
+            if (hi is None and lo is None) or not topic_matches(spec["topic"], topic):
+                continue
+            raw = extract_field(payload, spec.get("field"))
+            try:
+                v = float(raw) * float(spec.get("scale", 1)) + float(spec.get("offset", 0))
+            except (TypeError, ValueError):
+                continue
+            key = "%s|%s" % (spec.get("label", spec["topic"]), topic)
+            prev, hyst = states.get(key, "ok"), float(spec.get("alert_hysteresis", 1))
+            if hi is not None and (v > float(hi) or (prev == "high" and v > float(hi) - hyst)):
+                state = "high"
+            elif lo is not None and (v < float(lo) or (prev == "low" and v < float(lo) + hyst)):
+                state = "low"
+            else:
+                state = "ok"
+            states[key] = state
+            if state != prev:
+                unit = spec.get("unit", "")
+                shown = "%d%s" % (round(v), unit) if int(spec.get("decimals", 1)) == 0 else "%.1f%s" % (v, unit)
+                limit = hi if state == "high" else lo if state == "low" else None
+                out.append({"kind": "reading_alert", "label": spec.get("label", topic), "text": state,
+                            "value": shown.replace("F", " degrees").replace("%", " percent"),
+                            "limit": ("%s degrees" % limit if unit == "F" else "%s%s" % (limit, unit)) if limit is not None else "",
+                            "range": "%s to %s%s" % (lo if lo is not None else "", hi if hi is not None else "",
+                                                     " degrees" if unit == "F" else unit)})
+        return out
 
     def summary(self, now: dt.datetime) -> str:
         with self.lock:

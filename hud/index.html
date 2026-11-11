@@ -498,6 +498,9 @@ footer.foot::before { content: ""; position: absolute; left: 0; right: 0; top: 0
     if (w.uv != null) wl += row("UV index", w.uv);
     if (w.aqi) { var aq = w.aqi.value, aqc = aq > 150 ? "crit-text" : aq > 100 ? "warn-text" : aq > 50 ? "" : "ok-text";
       wl += row("Outdoor air", aq + " · " + w.aqi.band, aqc); if (aq > 100) wlvl = aq > 150 ? "crit" : "warn"; }
+    if (w.wine) { var wt = w.wine.temp, wout = (w.wine.high != null && wt > w.wine.high) || (w.wine.low != null && wt < w.wine.low);
+      wl += row("Wine room", wt + "°F" + (w.wine.humidity != null ? " · " + Math.round(w.wine.humidity) + "%" : ""), wout ? "warn-text" : "ok-text");
+      if (wout && !wlvl) wlvl = "warn"; }
     var indoor = s.indoor_air || [];
     if (indoor.length) { wl += '<div class="sub-h">Indoor</div>'; indoor.slice(0, 5).forEach(function (x) { wl += row(x.room + " · " + x.what.replace("Volatile Organic Compound", "VOC"), x.value); }); }
     (w.alerts || []).forEach(function (a) {
