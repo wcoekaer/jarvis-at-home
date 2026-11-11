@@ -155,8 +155,8 @@ footer.foot::before { content: ""; position: absolute; left: 0; right: 0; top: 0
 @keyframes tick { to { transform: translateX(-100%); } }
 .meta { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font: 0.66rem var(--f-data); color: var(--muted); }
 
-/* boot sequence */
-.boot .panel, .boot .reactor, .boot .flows, .boot .trace, .boot .clock { opacity: 0; }
+[hidden] { display: none !important; }
+/* boot sequence: plays once when the first data arrives; nothing is hidden before that */
 @media (prefers-reduced-motion: no-preference) {
   .booted .panel, .booted .reactor, .booted .flows, .booted .trace, .booted .clock {
     animation: rise .7s cubic-bezier(.2,.8,.2,1) both; }
@@ -166,8 +166,9 @@ footer.foot::before { content: ""; position: absolute; left: 0; right: 0; top: 0
   @keyframes fromleft { from { opacity: 0; transform: translateX(-24px); filter: blur(4px); } }
   @keyframes fromright { from { opacity: 0; transform: translateX(24px); filter: blur(4px); } }
 }
-.gate { position: relative; z-index: 2; max-width: 440px; margin: 20vh auto 0; text-align: center; display: grid; gap: 12px;
-        font: 0.9rem var(--f-data); color: var(--muted); }
+.gate { position: fixed; z-index: 5; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(440px, calc(100% - 32px));
+        text-align: center; display: grid; gap: 12px; padding: 22px; font: 0.9rem var(--f-data); color: var(--text);
+        background: rgba(2, 10, 16, 0.92); border: 1px solid var(--line-hot); box-shadow: 0 0 40px rgba(110,214,255,.2); }
 .gate .brand { justify-content: center; font-size: 1.5rem; }
 
 @media (max-width: 860px) {
@@ -176,11 +177,11 @@ footer.foot::before { content: ""; position: absolute; left: 0; right: 0; top: 0
 }
 </style>
 </head>
-<body class="boot">
+<body>
 <canvas id="bg" aria-hidden="true"></canvas>
 <div class="scan" aria-hidden="true"></div>
 
-<div id="app" class="hud" hidden>
+<div id="app" class="hud">
   <header class="bar">
     <div class="brand"><span class="dot" id="dot"></span>JARVIS<small id="where"></small></div>
     <div class="chips" id="chips"></div>
@@ -458,8 +459,8 @@ footer.foot::before { content: ""; position: absolute; left: 0; right: 0; top: 0
 
   function render(s) {
     last = s;
-    $("app").hidden = false; $("gate").hidden = true;
-    if (!booted) { booted = true; requestAnimationFrame(function () { document.body.classList.remove("boot"); document.body.classList.add("booted"); }); }
+    $("gate").hidden = true;
+    if (!booted) { booted = true; document.body.classList.add("booted"); }
     $("where").textContent = s.location || "";
     var chips = [], v = s.voice || {}, n = s.network || {}, sec = s.security || {}, e = s.energy || {}, ticker = [];
 
@@ -575,7 +576,9 @@ footer.foot::before { content: ""; position: absolute; left: 0; right: 0; top: 0
     fresh();
   }
 
-  function gate(msg) { $("gate").hidden = false; if (!last) $("app").hidden = true; $("gate-msg").textContent = msg; }
+  function gate(msg) { $("gate").hidden = false; $("gate-msg").textContent = msg; $("fresh").textContent = msg; }
+
+  requestAnimationFrame(loop);   // animations run even before (or without) data
 
   // ---------- data sources ----------
   if (window.JARVIS_SOURCE === "ws") {
@@ -617,7 +620,6 @@ footer.foot::before { content: ""; position: absolute; left: 0; right: 0; top: 0
     };
     checkVersion(); setInterval(checkVersion, 60000);
   }
-  requestAnimationFrame(loop);
 })();
 </script>
 </body>
