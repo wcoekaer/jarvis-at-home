@@ -561,8 +561,11 @@ prompt: |
      or smoke, PG&E power shutoffs or outages, a Bay Area earthquake of
      magnitude 3.5 or greater since the last briefing, or storm and flood
      warnings. Say nothing about alerts if none are active.
-  5. News: the single top story with a one- or two-sentence description.
-     If the earlier briefings already covered that story and there is no
+  5. News: the single top non-political story with a one- or two-sentence
+     description. Skip politics entirely: elections, politicians, parties,
+     government policy fights and legislation. Prefer science, technology,
+     business, sport, weather events, notable discoveries or human-interest
+     news. If the earlier briefings already covered that story and there is no
      significant development, say there is nothing new on the news front
      in a few words instead of repeating it.
   6. Time-of-day items:
@@ -636,7 +639,7 @@ segments:
     instructions: |
       Midday: a one-sentence US stock market check (S&P 500, Nasdaq, and
       the tracked stock's price with its percentage move today), plus any major
-      breaking news.
+      non-political breaking news.
   - from: "15:45"
     to: "17:44"
     instructions: |
