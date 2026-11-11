@@ -1669,8 +1669,9 @@ class Alerter:
             return False
         if rule.get("severities") and ev.get("severity") not in rule["severities"]:
             return False
+        plurals = {"accessory": "accessories", "room": "rooms", "characteristic": "characteristics", "text": "texts"}
         for field in ("accessory", "room", "characteristic", "text"):
-            wanted = rule.get(field + "s") or rule.get(field)
+            wanted = rule.get(plurals[field]) or rule.get(field)
             if wanted:
                 wanted = wanted if isinstance(wanted, list) else [wanted]
                 have = ev.get(field, "")
