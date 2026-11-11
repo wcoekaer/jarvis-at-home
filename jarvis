@@ -1,0 +1,4 @@
+#!/bin/sh
+# Convenience wrapper: runs jarvis.py with the project venv.
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$DIR/.venv/bin/python" "$DIR/jarvis.py" "$@"

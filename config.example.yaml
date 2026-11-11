@@ -1,0 +1,681 @@
+# Jarvis configuration: EXAMPLE. Copy to config.yaml and fill in the <-- values.
+# config.yaml is git-ignored because it holds private details (home location,
+# device ids, HomeKit setup code). API keys never go here; they live in .env.
+# Jarvis HomePod broadcast configuration.
+# Changes take effect after restarting the daemon (./install.sh restart).
+
+# Default HomePods for broadcasts that don't list their own.
+# Names must match the AirPlay names exactly; run `./jarvis devices` to list them.
+homepods:
+  - Kitchen
+
+location: "Springfield, California 90000"   # <-- your town
+listener_name: Alex                 # <-- your first name
+name_probability: 0.35         # chance a given briefing greets you by name
+
+llm:
+  provider: openai             # openai | anthropic
+  model: gpt-5.5               # anthropic: claude-opus-5-5
+  effort: medium               # anthropic only: low | medium | high | xhigh | max
+  web_search: true             # look up live weather and news
+  max_searches: 6
+  user_location:               # localises web search results
+    city: Springfield
+    region: California
+    country: US
+    timezone: America/Los_Angeles
+
+tts:
+  engine: openai               # openai | say (built-in macOS, offline)
+  model: gpt-4o-mini-tts
+  voice: echo                  # openai voices: fable, onyx, ash, echo, alloy, coral, nova, sage, shimmer...
+  instructions: >-
+    Voice: a refined, articulate British male with a received-pronunciation
+    accent, as from a highly capable AI butler. Tone: calm, composed, warm
+    but restrained, quietly confident. Delivery: crisp and precise, measured
+    pace, slight dry understatement on lighter lines, never excitable. Pause
+    briefly between topics.
+  speed: 1.1                   # openai: playback speed, pitch preserved (1.0 = normal)
+  fallback_voice: Daniel       # macOS British voice used if OpenAI TTS fails
+
+playback:
+  volume: 50                   # 0-100; omit to leave HomePod volume unchanged
+  prepare_seconds: 180         # start the LLM + TTS this long before the broadcast time
+  # chime: ~/jarvis/chime.wav  # optional sound played before the speech
+
+# Spoken if the LLM call fails; remove to skip the broadcast instead.
+failure_message: "My apologies. I was unable to assemble your briefing this time."
+
+log_file: ~/Library/Logs/jarvis/jarvis.log
+archive_dir: ~/Library/Logs/jarvis/scripts   # keeps a text copy of every briefing
+
+overnight: {from: "21:00", to: "07:00"}   # window for the 7:00 security recap
+memory_count: 3                # earlier briefings from today shown to the model
+flourish_probability: 0.13     # ~2 of 15 daily updates get a dry aside or trivia
+context_file: ~/Library/Caches/jarvis/context.json   # written by the JarvisContext helper
+
+# Live data from your MQTT broker. The latest value of each topic is kept in
+# memory (and cached to disk) and offered to the model as {home_status}.
+# Host and credentials: MQTT_HOST / MQTT_USERNAME / MQTT_PASSWORD in .env.
+mqtt:
+  enabled: true
+  port: 1883
+  max_age_minutes: 15          # default; ignore values older than this
+  topics:
+    # Tesla Powerpack
+    - {topic: /tesla/powerpack/state, field: stateOfEnergyPercent, label: Powerpack charge, unit: "%", decimals: 0}
+    - {topic: /tesla/powerpack/state, field: energyRemainingWh, scale: 0.001, label: Powerpack energy remaining, unit: kWh, decimals: 0}
+    - {topic: /tesla/powerpack/state, field: health.charging, label: Powerpack charging}
+    - {topic: /tesla/powerpack/state, field: health.discharging, label: Powerpack discharging}
+    - {topic: /tesla/powerpack/state, field: health.lowBattery, label: Powerpack low battery}
+    - {topic: /tesla/powerpack/state, field: health.equipmentFault, label: Powerpack equipment fault}
+    - {topic: teslaapi/energy/live_status, field: response.solar_power, scale: 0.001, label: Solar production, unit: kW}
+    - {topic: teslaapi/energy/live_status, field: response.battery_power, scale: 0.001, label: "Battery power (negative = charging)", unit: kW}
+    - {topic: teslaapi/energy/live_status, field: response.load_power, scale: 0.001, label: House load, unit: kW}
+    - {topic: teslaapi/energy/live_status, field: response.storm_mode_active, label: Storm mode active}
+    # Vehicle mycar (other cars are deliberately not tracked). Published
+    # infrequently, so values are kept for a day. A sleeping car reports an error;
+    # its last real data is kept and the error appears as Vehicle status.
+    - {topic: teslaapi/vehicle_data_mycar, field: response.display_name, label: Vehicle name, max_age_minutes: 1440}
+    - {topic: teslaapi/vehicle_data_mycar, field: response.charge_state.battery_level, label: Vehicle battery, unit: "%", decimals: 0, max_age_minutes: 1440}
+    - {topic: teslaapi/vehicle_data_mycar, field: response.charge_state.battery_range, label: Vehicle range, unit: miles, decimals: 0, max_age_minutes: 1440}
+    - {topic: teslaapi/vehicle_data_mycar, field: response.charge_state.charging_state, label: Vehicle charging state, max_age_minutes: 1440}
+    - {topic: teslaapi/vehicle_data_mycar, field: response.charge_state.charge_limit_soc, label: Vehicle charge limit, unit: "%", decimals: 0, max_age_minutes: 1440}
+    - {topic: teslaapi/vehicle_data_mycar, field: response.vehicle_state.locked, label: Vehicle locked, max_age_minutes: 1440}
+    - {topic: teslaapi/vehicle_data_mycar, field: response.vehicle_state.sentry_mode, label: Vehicle sentry mode, max_age_minutes: 1440}
+    - {topic: teslaapi/vehicle_data_mycar, field: error, label: Vehicle status, max_age_minutes: 1440}
+    # A stock price published on your broker (live price)
+    - {topic: /stock/acme, field: price, label: ACME share price, unit: USD, decimals: 2, max_age_minutes: 60}
+    # UniFi Protect device availability
+    - {topic: /unifi/protect/+/availability, count_value: offline, label: UniFi Protect devices offline, max_age_minutes: 1440}
+    # Local weather station (WeatherFlow Tempest, published hourly, metric -> US units)
+    - {topic: http_weatherflow, field: fields.obs_0_air_temperature, scale: 1.8, offset: 32, decimals: 0, label: Home weather station temperature, unit: F, max_age_minutes: 90}
+    - {topic: http_weatherflow, field: fields.obs_0_feels_like, scale: 1.8, offset: 32, decimals: 0, label: Feels like, unit: F, max_age_minutes: 90}
+    - {topic: http_weatherflow, field: fields.obs_0_relative_humidity, decimals: 0, label: Humidity, unit: "%", max_age_minutes: 90}
+    - {topic: http_weatherflow, field: fields.obs_0_wind_avg, scale: 2.237, decimals: 0, label: Wind, unit: mph, max_age_minutes: 90}
+    - {topic: http_weatherflow, field: fields.obs_0_wind_gust, scale: 2.237, decimals: 0, label: Wind gusts, unit: mph, max_age_minutes: 90}
+    - {topic: http_weatherflow, field: fields.obs_0_precip_accum_local_day, scale: 0.03937, decimals: 2, label: Rain today, unit: inches, max_age_minutes: 90}
+    - {topic: http_weatherflow, field: fields.obs_0_uv, label: UV index, max_age_minutes: 90}
+    - {topic: http_weatherflow, field: fields.obs_0_sea_level_pressure, decimals: 0, label: Pressure, unit: hPa, max_age_minutes: 90}
+    - {topic: http_weatherflow, field: fields.obs_0_lightning_strike_count_last_1hr, decimals: 0, label: Lightning strikes in the last hour, max_age_minutes: 90}
+    - {topic: http_weatherflow, field: fields.obs_0_lightning_strike_last_distance, scale: 0.6214, decimals: 0, label: Last lightning strike distance, unit: miles, max_age_minutes: 90}
+    # Apple Home accessories, via the JarvisHome bridge (homekit/<home>/<room>/<accessory>/<characteristic>).
+    # ~1,200 values are published; only the useful ones are given to the model.
+    - {topic: "homekit/MyHome/+/+/+", field: text, label: "HomeKit lock", topic_label_parts: 2, max_age_minutes: 1440,
+       include: [Lock Mechanism Current State]}
+    - {topic: "homekit/MyHome/+/+/+", field: text, label: "HomeKit sensor", topic_label_parts: 3, max_age_minutes: 1440,
+       include: [Contact Sensor State, Door State],
+       exclude: [Powerpack]}         # Powerpack flags duplicate the direct Powerpack data
+    - {topic: "homekit/MyHome/+/+/+", field: text, label: "HomeKit SAFETY", topic_label_parts: 3, max_age_minutes: 1440,
+       include: [Leak Detected, Smoke Detected, Carbon Monoxide Detected], only_values: [DETECTED]}
+    - {topic: "homekit/MyHome/+/+/+", field: text, label: "HomeKit low battery", topic_label_parts: 2, max_age_minutes: 1440,
+       include: [Status Low Battery], only_values: [low battery]}
+    - {topic: "homekit/+/+/+/+", field: text, label: "Indoor air", topic_label_parts: 3, max_age_minutes: 180,
+       include: [Air Quality, PM2.5 Density, PM10 Density, Carbon dioxide Level, Volatile Organic Compound Density]}
+
+  # UniFi Protect telemetry: WAN links, recorder RAID/disk health, sensor
+  # batteries and alarms, camera detections (see UnifiTracker in jarvis.py).
+  unifi:
+    enabled: true
+    topic: /unifi/protect/+/telemetry
+    ignore_wan: [WAN4]         # WAN ports count as offline only on link loss; reachability comes from mqtt.internet
+    detection_window_minutes: 30
+    detection_types: [person]   # ignore animals, vehicles, audio events
+    # Cameras on the NVR send no person detections, only plain motion events.
+    # Listed cameras report those as "motion" (see the nvr-motion alert).
+    motion_cameras: [Exterior Garage Door, NVR camera, NVR camera, NVR camera, NVR camera]
+    # Camera id -> name (ids from `./jarvis cameras --watch`). Names learned
+    # from UniFi messages are added automatically.
+    # Camera MAC -> name. Used for online/offline by name, and to learn each
+    # camera's Protect id automatically when UniFi sends a record with its MAC.
+    camera_macs:
+      "AA:BB:CC:00:00:01": Battery Pad
+      "AA:BB:CC:00:00:02": Entry
+      "AA:BB:CC:00:00:03": Driveway
+      "AA:BB:CC:00:00:04": Bedroom Hallway
+    # Protect id -> name (detection events carry only the id). Known so far:
+    camera_names:
+      0000000000000000000000a0: Battery Pad
+      0000000000000000000000a1: Driveway
+      0000000000000000000000a2: Bedroom Hallway
+      0000000000000000000000a3: Entry
+      0000000000000000000000a4: Basement          
+      0000000000000000000000a5: Exterior Garage Door   # on the NVR
+      0000000000000000000000a6: NVR camera          # NVR cameras: temporary names, rename me
+      0000000000000000000000a7: NVR camera
+      0000000000000000000000a8: NVR camera
+      0000000000000000000000a9: NVR camera
+      # Other cameras: learned from camera_macs, or add the id from the Protect
+      # web UI URL (.../sidepanel/device/<id>/manage)
+
+  energy:                      # daily totals + low-battery thresholds from the Powerpack
+    topic: /tesla/powerpack/state
+    thresholds: [50, 30]       # percent; each fires once when crossed, see battery alerts
+    rearm_points: 3            # re-arm after recovering this far above the threshold
+  internet:                    # reachability from the telegraf ping data (1.1.1.1, ~2/s)
+    topic: ping_ping
+    down_after_seconds: 15     # no replies this long -> down
+    up_after_successes: 10     # consecutive replies -> back up
+    degraded_loss_percent: 10  # over a 5-minute window
+    degraded_latency_ms: 150
+  say_topic: jarvis/say        # publish text (or {"text","homepods","volume","urgent"}) to have Jarvis say it
+  brief_topic: jarvis/brief    # publish a broadcast name (or nothing) to run a briefing now
+  discover: true               # catalog every topic in ~/Library/Caches/jarvis/mqtt-topics.json
+
+# Drones near the house, from the OSP airspace server (AIRSPACE_URL and
+# AIRSPACE_API_KEY in .env). Only the house Remote ID sensor is used.
+airspace:
+  enabled: true
+  sensor_id: ds00000000000000    # <-- your Remote ID sensor id
+  poll_seconds: 60
+  new_sighting_gap_minutes: 15   # a drone seen again after this gap counts as a new sighting
+  ignore_classifications: [friendly]
+  ignore_serials:
+    - XXXXXXXXXXXXXXXX           # <-- your own drone's serial: never announced
+
+# External feeds (feeds.py). Each polls on its own schedule and only announces
+# new items; the first poll after install just records what's already there.
+feeds:
+  home: {lat: 0.0, lng: 0.0}   # <-- your home
+  weather_alerts:              # National Weather Service alerts for the house's exact point
+    poll_seconds: 300
+  earthquakes:                 # USGS real-time feed; announce if mag >= M within N miles
+    poll_seconds: 120
+    tiers: [[3.0, 50], [4.5, 150], [6.0, 500]]
+  wildfires:                   # NIFC WFIGS current incidents (includes CAL FIRE)
+    poll_seconds: 900
+    watch_miles: 60            # listed in briefings
+    alert_miles: 25            # announced when new
+  outdoor_air:                 # IQAir free plan (IQAIR_API_KEY): 10,000 calls/month; this uses ~1,450
+    poll_seconds: 1800
+    thresholds: [100, 150]     # US AQI: unhealthy for sensitive groups, unhealthy
+  flight_restrictions:         # TFRs / drone NOTAMs from the airspace server
+    poll_seconds: 1800
+    watch_miles: 10
+  low_aircraft:                # manned aircraft low near the house (ADS-B/UAT via the airspace server)
+    poll_seconds: 30
+    radius_miles: 2
+    max_altitude_ft_agl: 1500
+    home_elevation_ft: 820
+    linger_minutes: 5          # a helicopter staying this long is announced as circling
+
+# Traffic from 511.org open data (TRAFFIC_API_KEY in .env). Terms: 511 Data
+# Disseminator Agreement. Limit is 60 requests/hour per token; this polls ~15/h
+# and never exceeds max_requests_per_hour. Spoken traffic always credits
+# "data provided by 511.org".
+traffic:
+  enabled: true
+  county: San Mateo
+  home: {lat: 0.0, lng: 0.0}   # <-- your home   # for distances
+  events_poll_minutes: 5        # incidents (accidents, hazards): 12 requests/hour
+  closures_poll_minutes: 20     # work-zone full closures (WZDx): 3 requests/hour
+  max_requests_per_hour: 40     # hard cap, kept on disk across restarts
+
+# Apple Home / Siri: Jarvis appears in the Home app as a switch. "Hey Siri,
+# turn on Jarvis Update" runs the briefing immediately (it switches itself off).
+# Pairing code is logged on first start (or set pincode: "123-45-678").
+homekit:
+  enabled: true
+  # One accessory, several switches (each has its own Siri name). The first
+  # keeps the original "Jarvis Update" pairing. Briefing switches run the named
+  # broadcast immediately and switch back off; the quiet switch holds quiet mode
+  # (no scheduled updates or non-urgent alerts) until switched off or quiet_until.
+  switches:
+    - {name: Jarvis Update, broadcast: hourly}
+    - {name: Jarvis Security, broadcast: security}
+    - {name: Jarvis Energy, broadcast: energy}
+    - {name: Jarvis Quiet, type: quiet}
+  quiet_until: "07:00"
+  # homepods: [Kitchen]        # where on-demand briefings play (default: the broadcast's)
+  port: 51826
+  pincode: "123-45-678"        # <-- choose your own 8-digit setup code
+  acknowledgements:
+    - "One moment, sir. Gathering the latest."
+    - "Right away. Let me see what's new."
+    - "Certainly. Bringing you up to date."
+
+# Real-time alerts, spoken as soon as the event arrives (between the regular
+# updates). kinds: detection (types: person, vehicle, package, doorbell ring...;
+# cameras: names or ids), wan_offline, wan_online (ports: [WAN2]...), alarm.
+# Placeholders: {camera} {types} {port} {device} {detail}. First matching rule wins.
+alert_homepods: [BasementHP, PrimaryHP, LivingHP]
+alerts:
+  - name: person
+    kind: detection
+    types: [person]
+    cameras: [Battery Pad, Entry, Bedroom Hallway, Driveway]
+    cooldown_minutes: 5        # per rule: at most one announcement per 5 minutes
+    messages:
+      - "Pardon the interruption. Someone has been detected at the {camera} camera."
+      - "A brief note, sir: there is someone at the {camera} camera."
+      - "If I may, a person has just appeared on the {camera} camera."
+  # Internet reachability from the ping monitor (mqtt.internet).
+  - name: internet-down
+    kind: internet_down
+    cooldown_minutes: 5
+    messages:
+      - "Pardon the interruption. We appear to have lost the internet connection."
+      - "A word of warning, sir: the internet is down."
+  - name: internet-up
+    kind: internet_up
+    cooldown_minutes: 1
+    messages:
+      - "The internet connection is back, after about {detail}."
+      - "Good news: we're back online. The outage lasted about {detail}."
+  - name: internet-degraded
+    kind: internet_degraded
+    cooldown_minutes: 60
+    messages:
+      - "A minor note: the internet connection is degraded, with {detail}."
+  # Physical link loss on a gateway WAN port (cable or modem).
+  # NVR cameras can't tell people from other movement, so word it as movement
+  # and rate-limit harder (trees, cars and shadows also trigger motion).
+  - name: nvr-motion
+    kind: detection
+    types: [motion]
+    cameras: [Exterior Garage Door, NVR camera, NVR camera, NVR camera, NVR camera]
+    cooldown_minutes: 10
+    messages:
+      - "Pardon the interruption. There is movement at the {camera} camera."
+      - "A brief note, sir: the {camera} camera has picked up some movement."
+  # External feeds (see feeds:)
+  - name: weather-alert
+    kind: weather_alert
+    severities: [Moderate, Severe, Extreme]   # Minor ones only appear in briefings
+    cooldown_minutes: 0
+    messages:
+      - "Pardon the interruption. The National Weather Service has issued a {event} for this area, in effect until {until}."
+  - name: earthquake
+    kind: earthquake
+    cooldown_minutes: 0
+    messages:
+      - "An earthquake of magnitude {magnitude} has just been recorded {distance} {direction} of here, {place}."
+  - name: wildfire
+    kind: wildfire
+    cooldown_minutes: 0
+    messages:
+      - "A new wildfire has been reported: the {fire}, about {distance} {direction} of the house, currently {acres}."
+  - name: outdoor-air
+    kind: air_quality
+    cooldown_minutes: 60
+    messages:
+      - "A note on the air outside: the air quality index has reached {aqi}, which is {band}, mainly {pollutant}. Source: IQAir."
+  - name: flight-restriction
+    kind: flight_restriction
+    cooldown_minutes: 0
+    messages:
+      - "For your drone operations: a new {restriction} is in effect {where}, until {until}."
+  - name: low-aircraft
+    kind: low_aircraft
+    cooldown_minutes: 10
+    messages:
+      - "There is a {aircraft} flying low nearby, about {altitude} up, {distance} to the {direction}."
+  - name: aircraft-circling
+    kind: aircraft_loiter
+    cooldown_minutes: 30
+    messages:
+      - "A {aircraft} has been circling low to the {direction} for {minutes} minutes."
+  # Traffic (see traffic:). Add max_miles: 10 to limit to nearby, or
+  # severities: [Major, Severe]. The 511 credit line is required (agreement 5.b).
+  - name: traffic-accident
+    kind: traffic_accident
+    cooldown_minutes: 10
+    messages:
+      - "Traffic note: {text}. That's about {distance} from home. Data provided by 511.org."
+  - name: road-closure
+    kind: road_closure
+    cooldown_minutes: 10
+    messages:
+      - "Road closure in San Mateo County: {text}. About {distance} from home. Data provided by 511.org."
+  # Drones picked up by the house Remote ID sensor (see airspace:)
+  - name: drone
+    kind: drone
+    cooldown_minutes: 5
+    messages:
+      - "Pardon the interruption. A {model} drone has been detected about {distance} away, near {near}."
+      - "A word of note, sir: the drone sensor has picked up a {model}, roughly {distance} away, near {near}."
+  - name: drone-sensor-offline
+    kind: drone_sensor_offline
+    cooldown_minutes: 30
+    messages:
+      - "The {sensor} drone sensor has gone offline."
+  - name: drone-sensor-online
+    kind: drone_sensor_online
+    cooldown_minutes: 30
+    messages:
+      - "The {sensor} drone sensor is back online."
+  - name: wan-offline
+    kind: wan_offline
+    cooldown_minutes: 2
+    messages:
+      - "Pardon the interruption. The {port} port on the gateway has lost its link."
+  - name: wan-online
+    kind: wan_online
+    cooldown_minutes: 2
+    messages:
+      - "The {port} port on the gateway has its link back."
+  - name: battery-50
+    kind: battery_low
+    threshold: 50
+    cooldown_minutes: 0
+    messages:
+      - "A quick note, sir: the Powerpack is down to {level} percent."
+      - "For your information, the home battery has reached {level} percent."
+  - name: battery-30
+    urgent: true               # plays even in quiet mode
+    kind: battery_low
+    threshold: 30
+    cooldown_minutes: 0
+    messages:
+      - "Warning: the Powerpack is down to {level} percent. I'd suggest easing off heavy loads until the sun is back."
+      - "A word of caution, sir. The home battery is at {level} percent and falling. It may be wise to reduce power use."
+  # Apple Home events (needs the JarvisHome bridge). Matching is a
+  # case-insensitive substring on accessory / room / characteristic / text.
+  - name: homekit-safety
+    urgent: true               # plays even in quiet mode
+    kind: homekit
+    characteristics: [Smoke Detected, Carbon Monoxide Detected, Leak Detected]
+    texts: [DETECTED]          # exact match; motion/occupancy report lowercase "detected"
+    cooldown_minutes: 1
+    homepods: [BasementHP, PrimaryHP, LivingHP, Kitchen, OfficeHP, MudRoom, GarageHPMax, Primary Bathroom]
+    volume: 80
+    messages:
+      - "Urgent: the {accessory} in the {room} has triggered: {characteristic}. Please check immediately."
+  - name: garage-door
+    kind: homekit
+    characteristics: [Door State]
+    texts: [opening, open]
+    accessories: [Garage]
+    cooldown_minutes: 3
+    messages:
+      - "The {accessory} is opening."
+  # Starlink status flags exposed in Home as contact sensors (closed = normal).
+  - name: starlink-outage
+    kind: homekit
+    accessories: [Starlink Outage]
+    characteristics: [Contact Sensor State]
+    texts: [open]
+    cooldown_minutes: 10
+    messages:
+      - "Pardon the interruption. Starlink is reporting an outage."
+  - name: starlink-degraded
+    kind: homekit
+    accessories: [Starlink Degraded]
+    characteristics: [Contact Sensor State]
+    texts: [open]
+    cooldown_minutes: 30
+    messages:
+      - "A minor note, sir: the Starlink connection is degraded."
+  # - name: door-unlocked-at-night
+  #   kind: homekit
+  #   characteristics: [Lock Mechanism Current State]
+  #   texts: [unlocked]
+  #   hours: {from: "22:00", to: "06:00"}
+  #   messages: ["Pardon me, sir. The {accessory} has just been unlocked."]
+  - name: alarm
+    urgent: true               # plays even in quiet mode
+    kind: alarm
+    cooldown_minutes: 1
+    homepods: [BasementHP, PrimaryHP, LivingHP, Kitchen, OfficeHP, MudRoom, GarageHPMax, Primary Bathroom]
+    volume: 80
+    messages:
+      - "Urgent: the {device} reports a {detail}. Please check immediately."
+
+# Default prompt, used by every broadcast that doesn't define its own.
+# Placeholders: {date} {time} {weekday} {part_of_day} {location}
+#   {name_instruction} {flourish_instruction} {segment_instructions}
+#   {recent_briefings} {personal_context} {home_status}
+prompt: |
+  It is {time} on {date}, {part_of_day}, in {location}.
+
+  Earlier briefings today, most recent last:
+  <earlier_briefings>
+  {recent_briefings}
+  </earlier_briefings>
+
+  The listener's calendar, reminders and mail:
+  <personal>
+  {personal_context}
+  </personal>
+
+  Home and vehicle status (live sensor values):
+  <home>
+  {home_status}
+  </home>
+
+  Overnight security log (cameras: people only; internet; alarms):
+  <overnight>
+  {overnight_security}
+  </overnight>
+
+  Energy totals (solar, Powerpack, house):
+  <energy>
+  {energy_today}
+  </energy>
+
+  Traffic in San Mateo County (live):
+  <traffic>
+  {traffic}
+  </traffic>
+
+  Hazards (weather alerts, earthquakes, wildfires, outdoor air):
+  <hazards>
+  {hazards}
+  </hazards>
+
+  Airspace near the house (flight restrictions, low aircraft):
+  <airspace>
+  {airspace_notices}
+  </airspace>
+
+  Drones seen by the house Remote ID sensor in the last two hours:
+  <drones>
+  {drones}
+  </drones>
+
+  Deliver the spoken update, in this order:
+
+  1. Always: the time, with a fresh {part_of_day} greeting worded
+     differently from the earlier briefings. {name_instruction}
+  2. Always: the current temperature in {location}, in degrees Fahrenheit.
+     Prefer the home weather station reading in the home status when it is
+     available (it is measured at the house); otherwise use web search.
+  3. Weather: current conditions and the outlook in one short sentence.
+     If an earlier briefing already covered this and nothing has
+     meaningfully changed, skip the outlook and just give the temperature.
+  4. Local alerts, only if one is active right now for {location} and the
+     surrounding area (use the hazards section first; web search for the rest): Red Flag or fire weather warnings, poor air quality
+     or smoke, PG&E power shutoffs or outages, a Bay Area earthquake of
+     magnitude 3.5 or greater since the last briefing, or storm and flood
+     warnings. Say nothing about alerts if none are active.
+  5. News: the single top story with a one- or two-sentence description.
+     If the earlier briefings already covered that story and there is no
+     significant development, say there is nothing new on the news front
+     in a few words instead of repeating it.
+  6. Time-of-day items:
+     {segment_instructions}
+  7. Calendar: if a meeting starts within the next 45 minutes, mention it
+     and how long until it starts. Mention reminders only where the
+     time-of-day items ask for them.
+  8. Home status: if the Powerpack charge is 30 percent or less, always
+     open this part with a clear warning and suggest reducing power use; if
+     it is 50 percent or less, always mention the level. Always mention the
+     internet if it is DOWN or DEGRADED or there were outages today (once),
+     a NO PING DATA line, any named camera that is OFFLINE, and any gateway
+     WAN port that is OFFLINE (link lost),
+     any ALARM or HomeKit SAFETY line, any recorder storage problem, and a
+     Starlink Outage or Degraded sensor that is open (open means the flag is
+     on). Also always mention any drone in the drones section that an earlier
+     briefing has not already covered (model and roughly where), and the drone
+     sensor if it is offline; say nothing about drones otherwise.
+     Traffic: mention any accident or road closure in the traffic section that
+     an earlier briefing has not covered, nearest and most severe first (I-280,
+     the routes you drive most matter most); briefly note when
+     an earlier one has cleared. Whenever you mention traffic, say "data
+     provided by 511.org" once (required credit). Say nothing about traffic
+     if nothing new.
+     Hazards: always mention a National Weather Service alert the first time
+     it appears (then only when it changes or ends), any earthquake or new
+     wildfire in the hazards section not yet covered, and outdoor air quality
+     when the AQI is above 50 (credit IQAir). Indoor air: mention a room only
+     if its air quality is "inferior" or "poor", CO2 is above 1,200 ppm, or
+     PM2.5 is above 35. Airspace: mention a flight restriction covering or
+     near the house (it matters for drone flights) and any low aircraft or
+     circling helicopter not yet covered. Say nothing about these otherwise.
+     Mention other values only if noteworthy: a HomeKit lock that is
+     unlocked after 9 PM or before 6 AM, low vehicle or battery charge, an
+     equipment fault, low sensor or HomeKit device batteries (by name, at most
+     once a day, in the first update), more UniFi devices offline than
+     earlier, a RAID rebuild
+     (at most once every few hours, with its progress), people detected
+     by the cameras between 10 PM and 6 AM (never animals or audio events),
+     strong gusts, lightning nearby, or rain starting; or a meaningful
+     change since the last briefing), or where the time-of-day items ask
+     for it. Speak power in kilowatts and round sensibly. The house
+     normally runs off-grid on solar and the Powerpack; that is expected,
+     so never mention grid or off-grid status.
+  9. Stock: on weekdays between 6:30 AM and 1:30 PM (market hours),
+     give the tracked stock's price whenever it has moved more than 1 percent since it
+     was last mentioned today, or if it has not been mentioned yet today.
+     Otherwise leave it out unless the time-of-day items ask for it.
+
+  {flourish_instruction}
+
+  Close with a brief, understated sign-off. Length: about 45 seconds for a
+  full update; when little has changed, keep it under 20 seconds.
+
+# Extra content by time of day, inserted as {segment_instructions}.
+# First matching window wins; otherwise default_segment is used.
+segments:
+  - from: "06:00"
+    to: "07:14"
+    instructions: |
+      First update of the day: give the full forecast (high, low, chance
+      of rain), sunrise and sunset times, today's first few meetings,
+      reminders due today by name (overdue ones only as a count), and the
+      overnight state of the vehicles and home battery.
+      Then an overnight security recap from the overnight log: which cameras
+      saw people and roughly when (group close times together), any drones
+      detected (model, roughly when and where), any internet outages and
+      alarms. If nothing happened, say it was a quiet night in one short phrase.
+  - from: "11:45"
+    to: "13:14"
+    instructions: |
+      Midday: a one-sentence US stock market check (S&P 500, Nasdaq, and
+      the tracked stock's price with its percentage move today), plus any major
+      breaking news.
+  - from: "15:45"
+    to: "17:44"
+    instructions: |
+      Late afternoon: summarise the traffic section for the evening drive
+      (incidents and closures on the routes you drive), crediting "data provided by 511.org". Mention sunset
+      time once.
+  - from: "20:45"
+    to: "21:30"
+    instructions: |
+      Last update of the day: the battery runway from the energy totals and
+      whether tomorrow's solar looks good or poor (web search: cloud cover
+      for {location} tomorrow) - say plainly whether the battery should be
+      comfortable overnight; then a daily energy summary from the energy totals
+      (solar produced, what the house used, and where the Powerpack stands;
+      compare with yesterday if available, and say if the figures only cover
+      part of the day), tomorrow's forecast, tomorrow's first meeting, the
+      vehicle's charge level, and a calm wind-down sign-off wishing a good night.
+default_segment: |
+  Nothing extra unless something notable has happened.
+
+# Each broadcast: name, and either times (24h HH:MM, quote them) or
+# every_minutes with start/end; optional days, homepods/volume overrides,
+# and prompt (else the default above).
+broadcasts:
+  - name: hourly
+    every_minutes: 60
+    start: "07:00"
+    end: "21:00"
+    homepods: [BasementHP, PrimaryHP, LivingHP]
+
+  # Sunday evening: the week in review.
+  - name: weekly
+    times: ["18:30"]
+    days: [sun]
+    homepods: [BasementHP, PrimaryHP, LivingHP]
+    prompt: |
+      It is {time} on {date}. Deliver a spoken weekly recap, about 90 seconds,
+      as Jarvis, in a relaxed Sunday-evening tone. {name_instruction}
+
+      The week's facts:
+      <week>
+      {weekly_summary}
+      </week>
+
+      Current hazards and energy:
+      <hazards>
+      {hazards}
+      </hazards>
+      <energy>
+      {energy_today}
+      </energy>
+
+      Cover: energy (solar produced and what the house used, best and worst
+      day), security (camera activity by camera, anything unusual at night,
+      drones), anything notable from the alerts (outages, earthquakes, fires,
+      weather, traffic), and a one-line look at the coming week's weather for
+      {location} (web search). Group and summarise; do not list every alert.
+      If traffic is mentioned, say "data provided by 511.org". Close with a
+      brief, understated sign-off.
+
+  # 22:00 security sweep; also "Hey Siri, turn on Jarvis Security" at any time.
+  - name: security
+    times: ["22:00"]
+    homepods: [BasementHP, PrimaryHP, LivingHP]
+    prompt: |
+      It is {time} on {date}. Deliver a concise spoken security sweep of the
+      house, about 30 seconds, as Jarvis. {name_instruction}
+
+      Home and network status (live):
+      <home>
+      {home_status}
+      </home>
+
+      Camera and outage log since 9 PM:
+      <overnight>
+      {overnight_security}
+      </overnight>
+
+      Cover, in this order:
+      1. Locks: name every HomeKit lock that is unlocked; if all are locked,
+         say so in one phrase.
+      2. Doors, gates and windows: name any door or gate contact sensor that
+         is open. Ignore Starlink and Powerpack flags here.
+      3. Network: the internet if it is DOWN or DEGRADED or had outages today,
+         any gateway WAN port that is OFFLINE (link lost), or a Starlink Outage
+         or Degraded sensor that is open (open means the flag is on).
+      4. Cameras: people detected in the log, by camera and time; skip if none.
+      5. Any ALARM, HomeKit SAFETY line, or low battery on a lock.
+      Never mention grid or off-grid status. If it is after 9 PM, end with a
+      brief good-night line; otherwise a short sign-off. No preamble.
+
+  # "Hey Siri, turn on Jarvis Energy": on demand only.
+  - name: energy
+    on_demand: true
+    homepods: [BasementHP, PrimaryHP, LivingHP]
+    prompt: |
+      It is {time} on {date} in {location}. Deliver a concise spoken energy
+      briefing, about 30 seconds, as Jarvis. {name_instruction}
+
+      Live status:
+      <home>
+      {home_status}
+      </home>
+
+      Energy totals and runway:
+      <energy>
+      {energy_today}
+      </energy>
+
+      Cover: Powerpack charge and whether it is charging or discharging;
+      solar production and house load right now, in kilowatts; the battery
+      runway; today's solar and house use so far; and whether tomorrow looks
+      sunny or overcast (web search: cloud cover for {location} tomorrow), with
+      a one-sentence judgement of whether the battery will be comfortable
+      overnight. The house runs off-grid; never mention grid status.

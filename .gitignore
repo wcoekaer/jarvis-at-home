@@ -1,0 +1,17 @@
+# secrets and private configuration
+.env
+config.yaml
+*.state
+
+# local runtime artefacts
+.venv/
+__pycache__/
+*.pyc
+last-*.wav
+.DS_Store
+
+# build output / generated projects
+helpers/build/
+helpers/JarvisHome/build/
+helpers/JarvisHome/build-check/
+helpers/JarvisHome/*.xcodeproj/

@@ -1,0 +1,7 @@
+anthropic>=2.0
+openai>=3.0
+pyatv>=0.16
+PyYAML>=6.0
+srptools<2               # pyatv 0.18 is incompatible with srptools 2.0
+paho-mqtt>=2.0
+HAP-python>=5.0

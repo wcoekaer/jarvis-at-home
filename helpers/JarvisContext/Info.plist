@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>com.jarvis.context</string>
+    <key>CFBundleName</key><string>JarvisContext</string>
+    <key>CFBundleExecutable</key><string>JarvisContext</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>LSUIElement</key><true/>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Jarvis reads your upcoming events to mention them in spoken briefings.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>Jarvis reads reminders due today to mention them in spoken briefings.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Jarvis asks Mail for your unread message count.</string>
+</dict>
+</plist>
