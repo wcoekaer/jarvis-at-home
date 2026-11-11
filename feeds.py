@@ -23,6 +23,8 @@ import json
 import logging
 import math
 import os
+import re
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -79,7 +81,8 @@ class Feed:
         except (OSError, ValueError):
             self.state = {}
         self.primed = bool(self.state.get("primed"))
-        self.ok_at: Optional[dt.datetime] = None
+        self.ok_at = dt.datetime.fromtimestamp(self.state['ok_at']) if self.state.get('ok_at') else None
+        self.journal = None
 
     def save(self) -> None:
         self.state["primed"] = self.primed
@@ -123,9 +126,14 @@ class Feed:
                     await self.poll(session)
                     self.primed = True
                     self.ok_at = dt.datetime.now()
+                    self.state['ok_at'] = self.ok_at.timestamp()
+                    if self.journal:
+                        self.journal.health(self.name, 'ok', 'last poll succeeded', self.interval * 3)
                     self.save()
                 except Exception as e:  # never log URLs: some carry API keys
                     log.warning("%s poll failed: %s", self.name, str(e)[:120] if "key=" not in str(e) else type(e).__name__)
+                    if self.journal:
+                        self.journal.health(self.name, 'error', type(e).__name__, self.interval * 3)
                 await asyncio.sleep(self.interval)
 
 
@@ -162,6 +170,8 @@ class WeatherAlerts(Feed):
         out = []
         for a in self.state.get("active", {}).values():
             ends = parse_time(a["ends"])
+            if ends and ends.timestamp() <= now.timestamp():
+                continue
             out.append("- %s (%s) until %s" % (a["event"], a["severity"],
                                                ends.astimezone().strftime("%a %-I %p") if ends else "further notice"))
         return out
@@ -307,7 +317,7 @@ class OutdoorAir(Feed):
         d = data.get("data") or {}
         pol = (d.get("current") or {}).get("pollution") or {}
         if pol.get("aqius") is None:
-            return
+            raise ValueError('IQAir response has no air quality observation')
         aqi = int(pol["aqius"])
         self.state["current"] = {"aqi": aqi, "band": aqi_band(aqi), "main": POLLUTANTS.get(pol.get("mainus"), pol.get("mainus")),
                                  "city": d.get("city"), "ts": pol.get("ts")}
@@ -443,7 +453,8 @@ class LowAircraft(Feed):
             if not tr["announced"]:
                 tr["announced"] = now.isoformat()
                 self.state.setdefault("history", []).append(
-                    {"at": now.isoformat(), "label": label, "heli": heli, "agl": int(agl)})
+                    {"at": now.isoformat(), "label": label, "heli": heli, "agl": int(agl),
+                     "miles": round(miles, 1), "dir": tr["dir"]})
                 self.emit({"kind": "low_aircraft", "aircraft": kind_word, "callsign": str(t.get("callsign") or ""),
                            "altitude": "%d feet" % max(0, round(agl, -2)), "distance": "%.1f miles" % miles,
                            "direction": tr["dir"], "miles": miles})
@@ -467,12 +478,44 @@ class LowAircraft(Feed):
                 for h in self.state.get("history", []) if h["at"] >= since]
 
 
+class SolarWeather(Feed):
+    """NWS hourly cloud cover intervals for the optional energy planner."""
+    name = 'solar_weather'
+
+    async def poll(self, session):
+        url = self.state.get('grid_url')
+        if not url:
+            point = await self.get_json(session, 'https://api.weather.gov/points/%.4f,%.4f' % self.home)
+            url = point['properties']['forecastGridData']
+        if not url.startswith('https://api.weather.gov/'):
+            raise ValueError('unexpected NWS grid URL')
+        grid = await self.get_json(session, url)
+        hours = []
+        for item in grid['properties']['skyCover']['values']:
+            start, duration = item['validTime'].split('/')
+            match = re.fullmatch(r'P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?', duration)
+            at = parse_time(start)
+            value = item.get('value')
+            if not match or not at or value is None:
+                continue
+            d, h, m, s = [int(v or 0) for v in match.groups()]
+            end = at.timestamp() + d * 86400 + h * 3600 + m * 60 + s
+            if end > time.time():
+                hours.append({'start': at.timestamp(), 'end': end, 'cloud': max(0, min(100, float(value)))})
+        if not hours:
+            raise ValueError('NWS returned no usable cloud forecast')
+        self.state.update(grid_url=url, hours=hours)
+
+
 FEEDS = {"weather_alerts": WeatherAlerts, "earthquakes": Earthquakes, "wildfires": Wildfires,
          "outdoor_air": OutdoorAir, "flight_restrictions": FlightRestrictions, "low_aircraft": LowAircraft}
+FEEDS['solar_weather'] = SolarWeather
 
 
 def build_feeds(cfg: dict) -> Dict[str, Feed]:
     fcfg = cfg.get("feeds") or {}
+    if not fcfg or fcfg.get('enabled') is False:
+        return {}
     home = fcfg.get("home")
     if not home:
         raise ValueError("config: set feeds.home: {lat: ..., lng: ...}")
@@ -480,6 +523,12 @@ def build_feeds(cfg: dict) -> Dict[str, Feed]:
     out = {}
     for name, cls in FEEDS.items():
         c = fcfg.get(name) or {}
+        if name == 'solar_weather' and not c.get('enabled', False):
+            continue
+        if name == 'outdoor_air' and not os.environ.get('IQAIR_API_KEY'):
+            continue
+        if name in ('flight_restrictions', 'low_aircraft') and not (os.environ.get('AIRSPACE_URL') and os.environ.get('AIRSPACE_API_KEY')):
+            continue
         if c.get("enabled", True):
             out[name] = cls(c, home_t)
     return out

@@ -54,6 +54,53 @@ memory_count: 3                # earlier briefings from today shown to the model
 flourish_probability: 0.13     # ~2 of 15 daily updates get a dry aside or trivia
 context_file: ~/Library/Caches/jarvis/context.json   # written by the JarvisContext helper
 
+# Durable observations, delivery history, condition state and energy samples.
+memory:
+  database: ~/Library/Application Support/jarvis/journal.sqlite3
+  retention_days: 90
+  repeat_after_hours: 24      # unchanged facts can be mentioned again after this window
+
+# Arithmetic is performed locally; the LLM only describes the resulting scenarios.
+energy_planning:
+  enabled: true
+  history_days: 21
+  min_days: 3                 # per hour-of-day; until then use current load and credit no solar
+  horizon_hours: 24
+  morning_hour: 7             # forecast checkpoint, local time (not astronomical sunrise)
+  reserve_percent: 20
+  charge_efficiency: 0.9
+  max_age_minutes: 15
+
+# Persistent conditions use observed state and survive restarts. Rules are examples:
+# enable and adapt topic/accessory names to your installation. Subscribe only to the
+# characteristic needed; a broad wildcard could include unrelated accessory values.
+conditions:
+  - name: garage-left-open
+    enabled: false
+    topic: "homekit/MyHome/Garage/Garage Door/Door State"
+    field: text
+    equals: [open, opening]
+    for_minutes: 15
+    clear_minutes: 1
+    repeat_minutes: 60        # 0 = once per episode
+    max_age_minutes: 120
+    message: "The {accessory} has remained open for {minutes} minutes."
+    resolved_message: "The {accessory} is now closed."
+  - name: office-co2
+    enabled: false
+    topic: "homekit/MyHome/Office/Air Sensor/Carbon dioxide Level"
+    field: value
+    above: 1200
+    hysteresis: 150           # clear below 1050, avoiding threshold chatter
+    for_minutes: 10
+    clear_minutes: 3
+    repeat_minutes: 60
+    max_age_minutes: 30
+    message: "The office carbon dioxide level has stayed high for {minutes} minutes, now {value} parts per million."
+    resolved_message: "The office carbon dioxide level has recovered."
+  # Rules can also use below, hours: {from: "21:00", to: "07:00"},
+  # urgent: true, homepods: [Kitchen] and volume: 60.
+
 # Live data from your MQTT broker. The latest value of each topic is kept in
 # memory (and cached to disk) and offered to the model as {home_status}.
 # Host and credentials: MQTT_HOST / MQTT_USERNAME / MQTT_PASSWORD in .env.
@@ -177,6 +224,9 @@ airspace:
 # new items; the first poll after install just records what's already there.
 feeds:
   home: {lat: 0.0, lng: 0.0}   # <-- your home
+  solar_weather:              # optional NWS cloud cover; US locations only
+    enabled: false            # enable after setting feeds.home; no API key required
+    poll_seconds: 3600
   weather_alerts:              # National Weather Service alerts for the house's exact point
     poll_seconds: 300
   earthquakes:                 # USGS real-time feed; announce if mag >= M within N miles
@@ -219,6 +269,20 @@ email_reports:
   to: [you@example.com]
   broadcasts: [hourly]        # which broadcasts to send
   format: m4a                 # m4a (~0.5 MB, AAC 64k mono) or wav (~6 MB)
+
+# Wall display (hud.py, hud/index.html). Local: http://<this-mac>:8790/?token=<HUD_TOKEN>
+# (live, WebSocket). Remote: the page plus an AES-encrypted snapshot pushed over
+# SSH every minute; open it with the private link …/#k=<HUD_REMOTE_KEY>.
+hud:
+  enabled: true
+  port: 8790
+  push_seconds: 3              # local refresh
+  file_seconds: 60             # status file + remote push interval
+  remote:
+    enabled: false
+    host: www.example.com
+    identity: ~/.ssh/id_ed25519
+    path: /var/www/example/jarvis
 
 # Apple Home / Siri: Jarvis appears in the Home app as a switch. "Hey Siri,
 # turn on Jarvis Update" runs the briefing immediately (it switches itself off).

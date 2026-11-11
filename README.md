@@ -273,10 +273,125 @@ Typical load: the broker carries tens of thousands of messages an hour. Jarvis k
 latest values in memory and does real work only when it speaks (about one briefing an hour
 plus a handful of alerts a day).
 
+### Energy planning, persistent conditions, and the household journal
+
+The daemon now keeps a private SQLite journal at
+`~/Library/Application Support/jarvis/journal.sqlite3`. Existing configurations work with
+the defaults; copy the `memory`, `energy_planning`, and `conditions` examples when customising.
+The journal stores observed events even when quiet mode suppresses speech, generated
+transcripts, per-speaker playback results, condition timers, and energy samples. Retention
+defaults to 90 days. Back up the journal with SQLite's backup API while Jarvis is running,
+or copy the database and its WAL files with the service stopped.
+
+**Energy planning.** Five-minute samples build hourly demand and solar profiles from the
+last 21 days. Until an hour has at least three days of usable history, the projection uses
+recent demand and credits no solar for that hour. The forecast includes typical, lower,
+and upper battery scenarios, reserve crossings, and a configurable morning checkpoint
+(07:00 by default). These ranges are scenarios, not calibrated statistical confidence
+intervals. The planner assumes the off-grid power balance used by the existing tracker;
+it provides advice and does not change charging or loads.
+
+Enable `feeds.solar_weather.enabled: true` with your US `feeds.home` coordinates to use
+NWS cloud cover. This adjusts the installation's observed solar profile with an explicitly
+labelled heuristic; without fresh weather, forecasts use historical production. Early
+learning periods and missing hours are labelled low confidence. Battery telemetry older
+than 15 minutes makes the forecast unavailable. Predictions appear in energy and regular
+briefings, in the dashboard, and through `./jarvis forecast`.
+
+**Persistent conditions.** Each rule watches a specific MQTT topic or wildcard and a JSON
+`field`, with one of `equals`, `above`, or `below`. `for_minutes` controls the sustained
+duration before speech, `clear_minutes` debounces recovery, and `repeat_minutes` controls
+follow-ups (zero means once per episode). Numeric rules support `hysteresis`.
+Each matching topic has its own timer, acknowledgement, and snooze. Acknowledgement lasts
+until recovery; a snooze expires after the chosen interval. Timers survive restarts, but
+stale, unreachable, missing, or out-of-order readings cannot count as recovery. A gap longer
+than `max_age_minutes` resets the continuous-duration timer. Optional `hours`, `homepods`,
+`volume`, `urgent`, and `resolved_message` settings control delivery.
+
+The example garage and CO₂ rules are disabled: enable them after matching their topics to
+your broker. For time-bearing payloads, `observed_at` takes precedence over `ts`; use ISO 8601
+with timezone or epoch seconds. Retained messages without a source timestamp have unknown
+age. Rebuild the JarvisHome bridge to publish separate observation and republication times.
+Cached republication is no longer treated as a new device observation; choose age limits
+appropriate to sensors that report only changes.
+
+**Briefing memory.** The model returns spoken text plus IDs of facts it actually mentioned.
+Only successful deliveries mark those facts as heard, separately for each speaker. Failed
+or interrupted announcements remain visible and do not suppress future coverage. Unchanged
+state can be mentioned again after `memory.repeat_after_hours` (24 by default); historical
+events retain their delivery history for the journal retention period. This bookkeeping
+depends on the model's fact annotations and is not proof that a person heard an announcement.
+Old text archives remain on disk; they are not imported as confirmed deliveries.
+
+```bash
+./jarvis status                 # source health, condition keys, upcoming broadcasts and controls
+./jarvis doctor                 # dependencies, database integrity, daemon heartbeat and source health
+./jarvis forecast [--json]      # projected battery, demand and solar scenarios
+./jarvis history --hours 168    # transcripts and delivery results over seven days
+./jarvis history --events       # observed events, including unannounced events
+./jarvis dashboard              # http://127.0.0.1:8765; Ctrl-C stops the dashboard
+./jarvis replay                 # repeat the most recent saved briefing
+./jarvis replay <id>            # replay a specific history entry on its original speakers
+./jarvis quiet on               # or off
+./jarvis ack '<condition-key>'
+./jarvis snooze '<condition-key>' --minutes 60
+```
+
+The dashboard is an operator view local to the Mac, with energy scenarios, health,
+condition controls, upcoming broadcasts, and searchable event/delivery history. It binds
+only to loopback, uses no third-party scripts, and protects control requests with a session
+token. Controls are queued for the running daemon, with their result shown in the UI and
+`status`. They expire after two minutes if unprocessed. Replay synthesizes the saved text
+using the current voice configuration; it may use the TTS API. Replay and explicit on-demand
+requests work during quiet mode. `status`, `doctor`, `history`, and `forecast` support `--json`.
+
+After updating Python code, restart the service. The HUD/wall display, when configured,
+continues to use its own port and settings.
+
+Run the local regression suite without calling cloud APIs or playing audio:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest discover -s tests -v
+```
+
+### Wall display (HUD)
+
+`hud.py` and `hud/index.html` give Jarvis a wall display in the style of a holographic HUD,
+designed square-first for Apple HomeView's 1088×1088 screen; it also works on an iPad, a TV
+or a laptop. It shows:
+
+- the battery core with solar, house and battery flows and a 24-hour energy trace
+- weather and indoor and outdoor air
+- network and WAN status
+- an airspace radar with drones and low aircraft
+- locks, open doors and camera detections
+- hazards, traffic and the car
+- a voice panel and a scrolling alert ticker
+
+Configure it under `hud:` in `config.yaml`.
+
+- **Local, live:** `http://<this-mac>:8790/?token=<HUD_TOKEN>`. Updates over a WebSocket every
+  few seconds and reloads itself when the page file changes.
+- **Remote:** with `hud.remote.enabled`, every minute Jarvis encrypts the status
+  (AES-256-GCM) and uploads it with the page to a web server over SSH (`host`, `identity`,
+  `path`). Open `https://<host>/<path>/#k=<HUD_REMOTE_KEY>`. The key is in the URL fragment,
+  which browsers never send to the server, so the files on the server are useless without it.
+  The page reloads itself when a new version is published (it watches `version.txt`).
+- **Voice on the display:** tap "Tap to enable voice" once. After that each briefing plays on
+  the display as it starts on the HomePods; the remote page fetches the encrypted audio.
+  Browsers require that one tap, and a reload asks for it again. Limit it to certain
+  broadcasts with `hud.play_broadcasts`.
+
+Apple's HomeView has no third-party SDK or App Store (launch, Nov 2026): third-party
+content comes only from a paired iPhone (small widgets, CarPlay audio/video apps). The
+display is therefore a web page; check that HomeView's Safari keeps it on screen.
+
 ## 11. Privacy
 
 - **Ignored by git:** `.env` (keys) and `config.yaml` (home location, device ids, HomeKit
   setup code). The repo has only `.env.example` and `config.example.yaml`.
+- **Wall display:** the remote copy is encrypted end to end. The local one needs
+  `HUD_TOKEN`.
 - **API keys:** they never appear in logs; services whose responses echo keys are never
   logged.
 - **Pairing state:** briefing text, alert history and the HomeKit pairing state stay

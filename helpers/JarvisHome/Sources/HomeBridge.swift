@@ -40,6 +40,7 @@ final class HomeBridge: NSObject, ObservableObject, HMHomeManagerDelegate, HMAcc
     private var snapshotTimer: Timer?
     private let iso = ISO8601DateFormatter()
     private var subscribed = Set<UUID>()   // characteristics already set up
+    private var observedAt: [UUID: Date] = [:]
 
     init(mqtt: MQTTClient) {
         self.mqtt = mqtt
@@ -71,7 +72,10 @@ final class HomeBridge: NSObject, ObservableObject, HMHomeManagerDelegate, HMAcc
                     // One read per characteristic, at startup only.
                     if ch.properties.contains(HMCharacteristicPropertyReadable) {
                         ch.readValue { [weak self] error in
-                            if error == nil { self?.publish(ch, event: false) }
+                            if error == nil {
+                                self?.observedAt[ch.uniqueIdentifier] = Date()
+                                self?.publish(ch, event: false)
+                            }
                         }
                     }
                 }
@@ -107,6 +111,7 @@ final class HomeBridge: NSObject, ObservableObject, HMHomeManagerDelegate, HMAcc
 
     func accessory(_ accessory: HMAccessory, service: HMService, didUpdateValueFor characteristic: HMCharacteristic) {
         guard watchedTypes.contains(characteristic.characteristicType) else { return }
+        observedAt[characteristic.uniqueIdentifier] = Date()
         publish(characteristic, event: true)
     }
 
@@ -132,6 +137,7 @@ final class HomeBridge: NSObject, ObservableObject, HMHomeManagerDelegate, HMAcc
         var body: [String: Any] = ["home": home, "room": room, "accessory": accessory.name,
                                    "service": service.name, "characteristic": name,
                                    "value": value, "reachable": accessory.isReachable,
+                                   "observed_at": iso.string(from: observedAt[ch.uniqueIdentifier] ?? .distantPast),
                                    "ts": iso.string(from: Date())]
         if let text = describe(ch.characteristicType, value) { body["text"] = text }
         let topic = ["homekit", home, room, accessory.name, service.name == accessory.name ? name : "\(service.name) \(name)"]

@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Jarvis Display</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<!--JARVIS_SOURCE-->
+<style>
+/* Layout: square holographic HUD (HomeView 1088×1088 first; stacks on phones).
+   Left: atmosphere, network, airspace radar. Centre: clock, battery core, 24 h energy trace, voice.
+   Right: perimeter, outside world, alerts. Ticker along the bottom.
+   One deliberate dark look; motion is ambient and respects reduced-motion. */
+:root {
+  color-scheme: dark;
+  --bg: #02070c;
+  --panel: rgba(12, 34, 50, 0.38);
+  --line: rgba(110, 214, 255, 0.20);
+  --line-hot: rgba(110, 214, 255, 0.55);
+  --cyan: #6ed6ff;
+  --cyan-soft: #3e8cae;
+  --text: #dcf5ff;
+  --muted: #7ea4b6;
+  --amber: #ffb547;
+  --red: #ff5a52;
+  --green: #5ff0b0;
+  --solar: #ffd166;
+  --f-hud: "Chakra Petch", "Avenir Next Condensed", system-ui, sans-serif;
+  --f-data: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text); overflow-x: hidden;
+  font: 15px/1.45 var(--f-hud);
+  padding: max(12px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px))
+           max(12px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+}
+#bg { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+.scan { position: fixed; inset: 0; pointer-events: none; z-index: 1;
+        background: repeating-linear-gradient(0deg, rgba(255,255,255,0.018) 0 1px, transparent 1px 3px); }
+.hud {
+  position: relative; z-index: 2; max-width: 1088px; min-height: 100%; margin: 0 auto;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto; gap: 12px;
+}
+header.bar {
+  grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding-bottom: 8px; flex-wrap: wrap; position: relative;
+}
+header.bar::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--line-hot), transparent); }
+.brand { font-weight: 600; letter-spacing: 0.42em; color: var(--cyan); font-size: 1.1rem;
+         text-shadow: 0 0 12px rgba(110,214,255,0.55); display: flex; align-items: center; gap: 10px; }
+.brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px var(--green); }
+.brand small { letter-spacing: 0.14em; color: var(--muted); font-weight: 400; font-size: 0.7rem; text-shadow: none; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { font: 500 0.66rem var(--f-data); letter-spacing: 0.1em; text-transform: uppercase;
+        border: 1px solid var(--line); padding: 3px 8px; color: var(--muted); background: rgba(5,20,30,.5); }
+.chip.ok { color: var(--green); border-color: rgba(95,240,176,.4); }
+.chip.warn { color: var(--amber); border-color: rgba(255,181,71,.5); }
+.chip.crit { color: var(--red); border-color: rgba(255,90,82,.7); box-shadow: 0 0 12px rgba(255,90,82,.35); }
+
+.col { display: grid; gap: 12px; align-content: start; min-width: 0; }
+.panel {
+  position: relative; background: var(--panel); border: 1px solid var(--line); padding: 11px 13px 12px;
+  min-width: 0; backdrop-filter: blur(2px);
+}
+/* corner brackets */
+.panel::before, .panel::after { content: ""; position: absolute; width: 12px; height: 12px; pointer-events: none;
+  border-color: var(--cyan); border-style: solid; opacity: .8; }
+.panel::before { top: -1px; left: -1px; border-width: 2px 0 0 2px; }
+.panel::after { bottom: -1px; right: -1px; border-width: 0 2px 2px 0; }
+.panel.warn { border-color: rgba(255,181,71,.45); }
+.panel.warn::before, .panel.warn::after { border-color: var(--amber); }
+.panel.crit { border-color: rgba(255,90,82,.6); }
+.panel.crit::before, .panel.crit::after { border-color: var(--red); }
+@media (prefers-reduced-motion: no-preference) {
+  .panel.warn, .panel.crit { animation: alarm 2.4s ease-in-out infinite; }
+  .panel.crit { animation-duration: 1.2s; }
+  @keyframes alarm { 50% { box-shadow: 0 0 18px rgba(255,181,71,.18) inset; } }
+}
+.panel h2 { margin: 0 0 7px; font: 500 0.68rem var(--f-data); letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--cyan); display: flex; justify-content: space-between; gap: 8px; }
+.panel h2 span { color: var(--muted); letter-spacing: 0.06em; }
+.row { display: flex; justify-content: space-between; gap: 10px; font-size: 0.85rem; padding: 1px 0; }
+.row b { font: 500 0.84rem var(--f-data); color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+.row .k { color: var(--muted); }
+.big { font: 500 2.1rem/1 var(--f-data); font-variant-numeric: tabular-nums; text-shadow: 0 0 14px rgba(110,214,255,.35); }
+.big small { font-size: 0.9rem; color: var(--muted); margin-left: 2px; text-shadow: none; }
+.list { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; font-size: 0.8rem; }
+.list li { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 8px; }
+.list li .t { font: 0.72rem var(--f-data); color: var(--muted); padding-top: 1px; }
+.list li.plain { grid-template-columns: minmax(0, 1fr); }
+.sub-h { font: 0.64rem var(--f-data); letter-spacing: 0.18em; color: var(--muted); margin: 7px 0 3px; text-transform: uppercase; }
+.warn-text { color: var(--amber); } .crit-text { color: var(--red); } .ok-text { color: var(--green); }
+.none { color: var(--muted); font-size: 0.8rem; }
+.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* centre */
+.centre { display: grid; gap: 10px; align-content: start; justify-items: center; min-width: 0; }
+.clock { text-align: center; position: relative; }
+.clock .time { font: 500 clamp(2.6rem, 6.4vw, 4.3rem)/1 var(--f-data); letter-spacing: 0.04em;
+               text-shadow: 0 0 22px rgba(110,214,255,.45); }
+.clock .time .sec { font-size: 0.42em; color: var(--cyan); margin-left: 4px; }
+.clock .date { color: var(--muted); letter-spacing: 0.24em; text-transform: uppercase; font-size: 0.74rem; margin-top: 4px; }
+.reactor { position: relative; width: min(100%, 370px); aspect-ratio: 1; }
+.reactor svg { width: 100%; height: 100%; overflow: visible; }
+.reactor .read { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 2px; }
+.reactor .soc { font: 500 clamp(2.4rem, 6vw, 3.5rem)/1 var(--f-data); text-shadow: 0 0 20px rgba(110,214,255,.6); }
+.reactor .soc small { font-size: 1.1rem; color: var(--muted); }
+.reactor .lbl { font: 0.66rem var(--f-data); letter-spacing: 0.26em; color: var(--muted); text-transform: uppercase; }
+.reactor .subl { font: 0.78rem var(--f-data); color: var(--cyan); }
+.r-a, .r-b, .r-c, .core { transform-box: view-box; transform-origin: 50% 50%; }
+@media (prefers-reduced-motion: no-preference) {
+  .r-a { animation: rot 48s linear infinite; }
+  .r-b { animation: rot 30s linear infinite reverse; }
+  .r-c { animation: rot 12s linear infinite; }
+  .core { animation: breathe 4s ease-in-out infinite; }
+  .charging .core { animation-duration: 1.6s; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  @keyframes breathe { 50% { opacity: .55; transform: scale(.94); } }
+}
+.flows { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; width: 100%; }
+.flow { text-align: center; padding: 6px 0 2px; border-top: 1px solid var(--line); position: relative; }
+.flow .v { font: 500 1.3rem var(--f-data); font-variant-numeric: tabular-nums; }
+.flow .k { font: 0.62rem var(--f-data); letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+.flow.solar .v { color: var(--solar); }
+.trace { width: 100%; }
+.trace canvas { width: 100%; height: 92px; display: block; }
+.legend { display: flex; gap: 14px; justify-content: center; font: 0.62rem var(--f-data); color: var(--muted); letter-spacing: .1em; }
+.legend i { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 5px; }
+
+.voice { width: 100%; }
+.voice canvas { width: 100%; height: 40px; display: block; }
+.said { font-size: 0.88rem; max-height: 6.4em; overflow: hidden; margin-top: 6px;
+        display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
+.arm { font: 500 0.7rem var(--f-data); letter-spacing: .12em; text-transform: uppercase; color: var(--bg);
+       background: var(--cyan); border: 0; padding: 5px 10px; cursor: pointer; }
+.arm[aria-pressed="true"] { background: transparent; color: var(--green); border: 1px solid rgba(95,240,176,.5); }
+.arm:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+#radar { width: 100%; aspect-ratio: 1; max-width: 240px; display: block; margin: 2px auto 6px; }
+
+footer.foot { grid-column: 1 / -1; display: grid; gap: 4px; position: relative; padding-top: 6px; }
+footer.foot::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--line-hot), transparent); }
+.ticker { overflow: hidden; white-space: nowrap; font: 0.74rem var(--f-data); color: var(--cyan); mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); }
+.ticker span { display: inline-block; padding-left: 100%; }
+@media (prefers-reduced-motion: no-preference) { .ticker span { animation: tick var(--dur, 60s) linear infinite; } }
+@keyframes tick { to { transform: translateX(-100%); } }
+.meta { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font: 0.66rem var(--f-data); color: var(--muted); }
+
+/* boot sequence */
+.boot .panel, .boot .reactor, .boot .flows, .boot .trace, .boot .clock { opacity: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .booted .panel, .booted .reactor, .booted .flows, .booted .trace, .booted .clock {
+    animation: rise .7s cubic-bezier(.2,.8,.2,1) both; }
+  .booted .col:first-of-type .panel { animation-name: fromleft; }
+  .booted .col:last-of-type .panel { animation-name: fromright; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.98); filter: blur(4px); } }
+  @keyframes fromleft { from { opacity: 0; transform: translateX(-24px); filter: blur(4px); } }
+  @keyframes fromright { from { opacity: 0; transform: translateX(24px); filter: blur(4px); } }
+}
+.gate { position: relative; z-index: 2; max-width: 440px; margin: 20vh auto 0; text-align: center; display: grid; gap: 12px;
+        font: 0.9rem var(--f-data); color: var(--muted); }
+.gate .brand { justify-content: center; font-size: 1.5rem; }
+
+@media (max-width: 860px) {
+  .hud { grid-template-columns: minmax(0, 1fr); }
+  .centre { order: -1; }
+}
+</style>
+</head>
+<body class="boot">
+<canvas id="bg" aria-hidden="true"></canvas>
+<div class="scan" aria-hidden="true"></div>
+
+<div id="app" class="hud" hidden>
+  <header class="bar">
+    <div class="brand"><span class="dot" id="dot"></span>JARVIS<small id="where"></small></div>
+    <div class="chips" id="chips"></div>
+  </header>
+
+  <div class="col">
+    <section class="panel" id="p-weather"><h2>Atmosphere <span id="w-src"></span></h2><div id="weather"></div></section>
+    <section class="panel" id="p-network"><h2>Network</h2><div id="network"></div></section>
+    <section class="panel" id="p-airspace"><h2>Airspace <span>3 mi</span></h2><canvas id="radar" aria-label="Airspace radar"></canvas><div id="airspace"></div></section>
+  </div>
+
+  <div class="centre">
+    <div class="clock"><div class="time" id="time">--:--</div><div class="date" id="date"></div></div>
+    <div class="reactor" id="reactor" aria-label="Powerpack charge">
+      <svg viewBox="-120 -120 240 240" aria-hidden="true">
+        <defs>
+          <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+          <radialGradient id="coreg"><stop offset="0" stop-color="#e9fbff" stop-opacity=".95"/><stop offset=".35" stop-color="#6ed6ff" stop-opacity=".55"/><stop offset="1" stop-color="#6ed6ff" stop-opacity="0"/></radialGradient>
+        </defs>
+        <g class="r-a"><circle r="114" fill="none" stroke="rgba(110,214,255,.28)" stroke-width="1" stroke-dasharray="1 5"/>
+          <path d="M 0 -110 A 110 110 0 0 1 77.8 -77.8" fill="none" stroke="#6ed6ff" stroke-width="2" opacity=".7"/>
+          <path d="M 0 110 A 110 110 0 0 1 -77.8 77.8" fill="none" stroke="#6ed6ff" stroke-width="2" opacity=".7"/></g>
+        <g class="r-b"><circle r="102" fill="none" stroke="rgba(110,214,255,.22)" stroke-width="6" stroke-dasharray="46 10 6 10"/></g>
+        <circle r="88" fill="none" stroke="rgba(110,214,255,.10)" stroke-width="11"/>
+        <circle id="soc-arc" r="88" fill="none" stroke="#6ed6ff" stroke-width="11" transform="rotate(-90)" stroke-dasharray="0 553" filter="url(#glow)"/>
+        <g class="r-c"><circle r="74" fill="none" stroke="rgba(110,214,255,.35)" stroke-width="1" stroke-dasharray="20 8"/></g>
+        <g id="ticks"></g>
+        <circle class="core" r="46" fill="url(#coreg)"/>
+        <g id="orbit"><circle r="3.5" cx="0" cy="-74" fill="#e9fbff" filter="url(#glow)"/></g>
+      </svg>
+      <div class="read">
+        <div class="lbl">Powerpack</div>
+        <div class="soc"><span id="soc">--</span><small>%</small></div>
+        <div class="subl" id="soc-sub"></div>
+      </div>
+    </div>
+    <div class="flows">
+      <div class="flow solar"><div class="v" id="f-solar">--</div><div class="k">Solar kW</div></div>
+      <div class="flow"><div class="v" id="f-house">--</div><div class="k">House kW</div></div>
+      <div class="flow"><div class="v" id="f-batt">--</div><div class="k" id="f-batt-k">Battery kW</div></div>
+    </div>
+    <div class="trace">
+      <canvas id="trace" aria-label="Energy, last 24 hours"></canvas>
+      <div class="legend"><span><i style="background:var(--cyan)"></i>CHARGE %</span><span><i style="background:var(--solar)"></i>SOLAR</span><span><i style="background:#a98bff"></i>HOUSE</span><span>24 H</span></div>
+    </div>
+    <section class="panel voice" id="p-voice">
+      <h2>Voice <span id="v-next"></span></h2>
+      <canvas id="scope" aria-hidden="true"></canvas>
+      <div class="said" id="said"></div>
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button type="button" class="arm" id="arm" aria-pressed="false">Tap to enable voice</button>
+        <span class="none" id="arm-note"></span>
+      </div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="panel" id="p-security"><h2>Perimeter</h2><div id="security"></div></section>
+    <section class="panel" id="p-outside"><h2>Outside world</h2><div id="outside"></div></section>
+    <section class="panel" id="p-alerts"><h2>Alert log <span>24 h</span></h2><div id="alerts"></div></section>
+  </div>
+
+  <footer class="foot">
+    <div class="ticker" id="ticker"><span id="ticker-text">Systems online.</span></div>
+    <div class="meta"><span id="fresh">Waiting for data…</span><span id="credit"></span></div>
+  </footer>
+</div>
+
+<div id="gate" class="gate" hidden>
+  <div class="brand"><span class="dot"></span>JARVIS</div>
+  <div id="gate-msg">Connecting…</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
+  var row = function (k, v, cls) { return '<div class="row"><span class="k">' + esc(k) + '</span><b class="' + (cls || "") + '">' + esc(v) + "</b></div>"; };
+  var none = function (t) { return '<div class="none">' + esc(t) + "</div>"; };
+  var items = function (arr, fn) { return arr && arr.length ? '<ul class="list">' + arr.map(fn).join("") + "</ul>" : ""; };
+  var level = function (el, lvl) { el.classList.remove("warn", "crit"); if (lvl) el.classList.add(lvl); };
+  var reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var DIRS = { north: 0, northeast: 45, east: 90, southeast: 135, south: 180, southwest: 225, west: 270, northwest: 315 };
+  var store = { get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+                set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+
+  // ---------- canvases ----------
+  function fit(c) {
+    var r = c.getBoundingClientRect(), d = Math.min(window.devicePixelRatio || 1, 2);
+    if (c.width !== Math.round(r.width * d) || c.height !== Math.round(r.height * d)) {
+      c.width = Math.round(r.width * d); c.height = Math.round(r.height * d);
+    }
+    var ctx = c.getContext("2d"); ctx.setTransform(d, 0, 0, d, 0, 0); return [ctx, r.width, r.height];
+  }
+
+  // background particle field
+  var parts = [];
+  for (var i = 0; i < 70; i++) parts.push({ x: Math.random(), y: Math.random(), vx: (Math.random() - .5) * .00012, vy: (Math.random() - .5) * .00012, r: Math.random() * 1.4 + .3 });
+  function drawBg(t) {
+    var f = fit($("bg")), ctx = f[0], w = f[1], h = f[2];
+    ctx.clearRect(0, 0, w, h);
+    var g = ctx.createRadialGradient(w / 2, h * .42, 0, w / 2, h * .42, Math.max(w, h) * .6);
+    g.addColorStop(0, "rgba(40,140,200,.16)"); g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = "rgba(110,214,255,.045)"; ctx.lineWidth = 1;
+    for (var x = 0; x < w; x += 34) { ctx.beginPath(); ctx.moveTo(x + .5, 0); ctx.lineTo(x + .5, h); ctx.stroke(); }
+    for (var y = 0; y < h; y += 34) { ctx.beginPath(); ctx.moveTo(0, y + .5); ctx.lineTo(w, y + .5); ctx.stroke(); }
+    parts.forEach(function (p) {
+      p.x = (p.x + p.vx + 1) % 1; p.y = (p.y + p.vy + 1) % 1;
+      ctx.fillStyle = "rgba(110,214,255,.45)"; ctx.beginPath(); ctx.arc(p.x * w, p.y * h, p.r, 0, 7); ctx.fill();
+    });
+    for (var a = 0; a < parts.length; a++) for (var b = a + 1; b < parts.length; b++) {
+      var dx = (parts[a].x - parts[b].x) * w, dy = (parts[a].y - parts[b].y) * h, d2 = dx * dx + dy * dy;
+      if (d2 < 9000) { ctx.strokeStyle = "rgba(110,214,255," + (0.08 * (1 - d2 / 9000)).toFixed(3) + ")";
+        ctx.beginPath(); ctx.moveTo(parts[a].x * w, parts[a].y * h); ctx.lineTo(parts[b].x * w, parts[b].y * h); ctx.stroke(); }
+    }
+    var sy = (t / 9000 % 1) * h; // sweeping scan line
+    var sg = ctx.createLinearGradient(0, sy - 60, 0, sy); sg.addColorStop(0, "rgba(110,214,255,0)"); sg.addColorStop(1, "rgba(110,214,255,.07)");
+    ctx.fillStyle = sg; ctx.fillRect(0, sy - 60, w, 60);
+  }
+
+  // airspace radar
+  var blips = [];
+  function drawRadar(t) {
+    var f = fit($("radar")), ctx = f[0], w = f[1], h = f[2], cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 4;
+    ctx.clearRect(0, 0, w, h);
+    ctx.strokeStyle = "rgba(110,214,255,.25)"; ctx.lineWidth = 1;
+    [1, 2, 3].forEach(function (m) { ctx.beginPath(); ctx.arc(cx, cy, R * m / 3, 0, 7); ctx.stroke(); });
+    ctx.beginPath(); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy); ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R); ctx.stroke();
+    ctx.fillStyle = "rgba(126,164,182,.8)"; ctx.font = "9px IBM Plex Mono, monospace";
+    ctx.fillText("N", cx - 3, cy - R + 10); ctx.fillText("1", cx + R / 3 - 6, cy - 3); ctx.fillText("3 mi", cx + R - 24, cy - 3);
+    var ang = reduce ? -Math.PI / 2 : (t / 3200) % (Math.PI * 2) - Math.PI / 2;
+    for (var k = 0; k < 28; k++) {
+      ctx.fillStyle = "rgba(110,214,255," + (0.16 * (1 - k / 28)).toFixed(3) + ")";
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, R, ang - (k + 1) * 0.035, ang - k * 0.035); ctx.closePath(); ctx.fill();
+    }
+    ctx.strokeStyle = "rgba(110,214,255,.85)"; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + R * Math.cos(ang), cy + R * Math.sin(ang)); ctx.stroke();
+    blips.forEach(function (b) {
+      var r = Math.min(b.miles, 3) / 3 * R, a = (b.deg - 90) * Math.PI / 180;
+      var x = cx + r * Math.cos(a), y = cy + r * Math.sin(a);
+      var since = ((ang - a) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+      var glow = reduce ? 1 : Math.max(0.35, 1 - since / (Math.PI * 2));
+      ctx.fillStyle = b.kind === "drone" ? "rgba(255,181,71," + glow + ")" : "rgba(255,90,82," + glow + ")";
+      ctx.beginPath(); ctx.arc(x, y, 3.2, 0, 7); ctx.fill();
+      ctx.strokeStyle = ctx.fillStyle; ctx.beginPath(); ctx.arc(x, y, 3.2 + (1 - glow) * 7, 0, 7); ctx.stroke();
+    });
+    ctx.fillStyle = "#6ed6ff"; ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, 7); ctx.fill();
+  }
+
+  // voice oscilloscope
+  var speaking = false, audioLevel = 0, analyser = null, adata = null;
+  function drawScope(t) {
+    var f = fit($("scope")), ctx = f[0], w = f[1], h = f[2], mid = h / 2;
+    ctx.clearRect(0, 0, w, h);
+    var amp;
+    if (analyser) { analyser.getByteTimeDomainData(adata); var s = 0; for (var q = 0; q < adata.length; q++) s = Math.max(s, Math.abs(adata[q] - 128)); audioLevel = s / 128; }
+    amp = speaking ? Math.max(0.25, audioLevel) * h * 0.42 : h * 0.06;
+    ctx.lineWidth = 1.6; ctx.strokeStyle = speaking ? "#6ed6ff" : "rgba(110,214,255,.45)";
+    ctx.shadowColor = "#6ed6ff"; ctx.shadowBlur = speaking ? 10 : 0;
+    ctx.beginPath();
+    for (var x = 0; x <= w; x += 2) {
+      var p = x / w, env = Math.sin(p * Math.PI);
+      var y = mid + env * amp * (Math.sin(p * 22 + t / 140) * .6 + Math.sin(p * 51 - t / 90) * .3 + Math.sin(p * 7 + t / 400) * .4);
+      x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke(); ctx.shadowBlur = 0;
+  }
+
+  // 24 h energy trace
+  function drawTrace(hist) {
+    var f = fit($("trace")), ctx = f[0], w = f[1], h = f[2];
+    ctx.clearRect(0, 0, w, h);
+    ctx.strokeStyle = "rgba(110,214,255,.08)"; ctx.lineWidth = 1;
+    [0.25, 0.5, 0.75].forEach(function (g) { ctx.beginPath(); ctx.moveTo(0, h * g); ctx.lineTo(w, h * g); ctx.stroke(); });
+    if (!hist || hist.length < 2) { ctx.fillStyle = "rgba(126,164,182,.8)"; ctx.font = "10px IBM Plex Mono, monospace"; ctx.fillText("Collecting energy history…", 8, h / 2); return; }
+    var t0 = Date.now() - 24 * 3600e3, X = function (iso) { return Math.max(0, (new Date(iso).getTime() - t0) / (24 * 3600e3)) * w; };
+    var kmax = Math.max(2, Math.max.apply(null, hist.map(function (r) { return Math.max(r[2], r[3]); })) * 1.1);
+    var Y = function (v, max) { return h - 4 - (v / max) * (h - 10); };
+    // solar area
+    ctx.beginPath(); ctx.moveTo(X(hist[0][0]), h);
+    hist.forEach(function (r) { ctx.lineTo(X(r[0]), Y(r[2], kmax)); }); ctx.lineTo(X(hist[hist.length - 1][0]), h); ctx.closePath();
+    var gs = ctx.createLinearGradient(0, 0, 0, h); gs.addColorStop(0, "rgba(255,209,102,.45)"); gs.addColorStop(1, "rgba(255,209,102,.02)");
+    ctx.fillStyle = gs; ctx.fill();
+    var line = function (idx, max, color, wdt) { ctx.beginPath(); hist.forEach(function (r, n) { var x = X(r[0]), y = Y(r[idx], max); n ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      ctx.strokeStyle = color; ctx.lineWidth = wdt; ctx.stroke(); };
+    line(3, kmax, "rgba(169,139,255,.9)", 1.3);
+    ctx.shadowColor = "#6ed6ff"; ctx.shadowBlur = 8; line(1, 100, "#6ed6ff", 2); ctx.shadowBlur = 0;
+    var last = hist[hist.length - 1]; ctx.fillStyle = "#e9fbff"; ctx.beginPath(); ctx.arc(X(last[0]), Y(last[1], 100), 3, 0, 7); ctx.fill();
+  }
+
+  var running = true, lastHist = null;
+  document.addEventListener("visibilitychange", function () { running = !document.hidden; if (running) requestAnimationFrame(loop); });
+  function loop(t) {
+    if (!running) return;
+    drawBg(t); drawRadar(t); drawScope(t);
+    if (!reduce || !loop.once) { loop.once = true; }
+    requestAnimationFrame(loop);
+  }
+  window.addEventListener("resize", function () { drawTrace(lastHist); });
+
+  // reactor ticks + orbit
+  var tk = "";
+  for (var n = 0; n < 72; n++) { var a = n * 5 * Math.PI / 180, r1 = n % 6 ? 63 : 58;
+    tk += '<line x1="' + (Math.sin(a) * r1).toFixed(1) + '" y1="' + (-Math.cos(a) * r1).toFixed(1) + '" x2="' + (Math.sin(a) * 66).toFixed(1) + '" y2="' + (-Math.cos(a) * 66).toFixed(1) + '" stroke="rgba(110,214,255,.4)" stroke-width="1"/>'; }
+  $("ticks").innerHTML = tk;
+  var orbitDeg = 0, orbitDir = 1;
+  setInterval(function () { if (reduce) return; orbitDeg = (orbitDeg + orbitDir * 1.2 + 360) % 360; $("orbit").setAttribute("transform", "rotate(" + orbitDeg + ")"); }, 40);
+
+  // number tweening
+  function tween(el, to, dec) {
+    if (to == null || isNaN(to)) { el.textContent = "--"; el._v = null; return; }
+    var from = el._v == null ? to : el._v, t0 = performance.now(), d = reduce ? 0 : 900;
+    el._v = to;
+    (function step(now) { var p = d ? Math.min(1, (now - t0) / d) : 1, e = 1 - Math.pow(1 - p, 3);
+      el.textContent = (from + (to - from) * e).toFixed(dec || 0); if (p < 1) requestAnimationFrame(step); })(t0);
+  }
+  var socShown = 0;
+  function setSoc(v) {
+    var C = 2 * Math.PI * 88, from = socShown, t0 = performance.now(), d = reduce ? 0 : 1400;
+    socShown = v;
+    (function step(now) { var p = d ? Math.min(1, (now - t0) / d) : 1, e = 1 - Math.pow(1 - p, 3), cur = from + (v - from) * e;
+      $("soc-arc").setAttribute("stroke-dasharray", (cur / 100 * C).toFixed(1) + " " + C.toFixed(1)); if (p < 1) requestAnimationFrame(step); })(t0);
+  }
+
+  // clock
+  function tick() { var now = new Date();
+    $("time").innerHTML = esc(now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })) + '<span class="sec">' + String(now.getSeconds()).padStart(2, "0") + "</span>";
+    $("date").textContent = now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" }); }
+  tick(); setInterval(tick, 1000);
+
+  // ---------- audio (plays each briefing as it goes to the HomePods) ----------
+  var armed = false, actx = null, seenAudio = null, getAudio = null, player = new Audio();
+  player.preload = "auto";
+  $("arm").addEventListener("click", function () {
+    armed = !armed;
+    $("arm").setAttribute("aria-pressed", String(armed));
+    $("arm").textContent = armed ? "Voice on" : "Tap to enable voice";
+    $("arm-note").textContent = armed ? "Briefings will play here too." : "";
+    if (armed && !actx) {
+      try { actx = new (window.AudioContext || window.webkitAudioContext)();
+        var src = actx.createMediaElementSource(player); analyser = actx.createAnalyser(); analyser.fftSize = 512;
+        adata = new Uint8Array(analyser.fftSize); src.connect(analyser); analyser.connect(actx.destination); } catch (e) { analyser = null; }
+      // unlock playback on this tap (iOS/Safari)
+      player.src = "data:audio/mp4;base64,AAAAHGZ0eXBNNEEgAAAAAE00QSBtcDQyaXNvbQAAAAhmcmVlAAAAAG1kYXQ=";
+      player.play().catch(function () {});
+    }
+    if (actx && actx.state === "suspended") actx.resume();
+  });
+  player.addEventListener("ended", function () { speaking = false; $("p-voice").classList.remove("live"); });
+  function maybePlay(a) {
+    if (!a || !a.id) return;
+    if (seenAudio === null) { seenAudio = a.id; return; }          // don't replay what was already out when the page opened
+    if (a.id === seenAudio) return;
+    seenAudio = a.id;
+    if (!armed || !getAudio) return;
+    getAudio(a).then(function (url) { player.src = url; return player.play(); })
+      .then(function () { speaking = true; })
+      .catch(function () { $("arm-note").textContent = "Tap once more to allow sound."; armed = false;
+        $("arm").setAttribute("aria-pressed", "false"); $("arm").textContent = "Tap to enable voice"; });
+  }
+
+  // ---------- render ----------
+  var last = null, booted = false;
+  function fresh() {
+    if (!last) return;
+    var age = Math.round((Date.now() - new Date(last.generated).getTime()) / 60000);
+    var src = window.JARVIS_SOURCE === "ws" ? "live link" : "remote link";
+    $("fresh").textContent = (age <= 1 ? "Updated just now" : "Updated " + age + " min ago") + " · " + src;
+    $("fresh").className = age > 10 ? "warn-text" : "";
+    $("dot").style.background = age > 10 ? "var(--amber)" : "var(--green)";
+  }
+  setInterval(fresh, 15000);
+
+  function render(s) {
+    last = s;
+    $("app").hidden = false; $("gate").hidden = true;
+    if (!booted) { booted = true; requestAnimationFrame(function () { document.body.classList.remove("boot"); document.body.classList.add("booted"); }); }
+    $("where").textContent = s.location || "";
+    var chips = [], v = s.voice || {}, n = s.network || {}, sec = s.security || {}, e = s.energy || {}, ticker = [];
+
+    // voice
+    speaking = !!v.speaking || (!player.paused && !player.ended && player.currentTime > 0);
+    $("v-next").textContent = speaking ? "speaking" : (v.next ? "next " + v.next.at : "");
+    var lb = v.last_briefing;
+    $("said").textContent = lb ? lb.at + " · " + lb.text : "No briefing yet today.";
+    chips.push(v.quiet ? ["Quiet mode", "warn"] : ["Voice active", "ok"]);
+    maybePlay(v.audio);
+
+    // energy
+    var soc = e.soc, socCls = soc == null ? "" : soc <= 30 ? "crit" : soc <= 50 ? "warn" : "";
+    tween($("soc"), soc == null ? null : Math.round(soc), 0);
+    setSoc(soc || 0);
+    $("soc-arc").setAttribute("stroke", socCls === "crit" ? "#ff5a52" : socCls === "warn" ? "#ffb547" : "#6ed6ff");
+    var bk = e.battery_kw, charging = bk != null && bk < -0.05;
+    $("reactor").classList.toggle("charging", charging); orbitDir = charging ? 1 : -1;
+    var sub = []; if (e.remaining_kwh != null) sub.push(e.remaining_kwh + " kWh"); if (e.runway_h != null) sub.push("~" + e.runway_h + " h runway");
+    $("soc-sub").textContent = sub.join(" · ");
+    tween($("f-solar"), e.solar_kw, 1); tween($("f-house"), e.house_kw, 1);
+    tween($("f-batt"), bk == null ? null : Math.abs(bk), 1);
+    $("f-batt-k").textContent = bk == null ? "Battery kW" : charging ? "Charging kW" : bk > 0.05 ? "Discharge kW" : "Battery idle";
+    if (socCls) chips.push(["Battery " + Math.round(soc) + "%", socCls]);
+    if (e.today) ticker.push("Energy today: solar " + e.today.solar + " kWh, house " + e.today.house + " kWh");
+    lastHist = e.history; drawTrace(lastHist);
+
+    // atmosphere
+    var w = s.weather || {}, wl = "", wlvl = "";
+    wl += '<div class="big">' + esc(w.temp == null ? "--" : w.temp) + "<small>°F</small></div>";
+    if (w.feels != null) wl += row("Feels like", w.feels + "°F");
+    if (w.humidity != null) wl += row("Humidity", w.humidity + "%");
+    if (w.wind != null) wl += row("Wind / gusts", w.wind + " / " + (w.gust == null ? "--" : w.gust) + " mph");
+    if (w.rain != null && Number(w.rain) > 0) wl += row("Rain today", w.rain + " in");
+    if (w.uv != null) wl += row("UV index", w.uv);
+    if (w.aqi) { var aq = w.aqi.value, aqc = aq > 150 ? "crit-text" : aq > 100 ? "warn-text" : aq > 50 ? "" : "ok-text";
+      wl += row("Outdoor air", aq + " · " + w.aqi.band, aqc); if (aq > 100) wlvl = aq > 150 ? "crit" : "warn"; }
+    var indoor = s.indoor_air || [];
+    if (indoor.length) { wl += '<div class="sub-h">Indoor</div>'; indoor.slice(0, 5).forEach(function (x) { wl += row(x.room + " · " + x.what.replace("Volatile Organic Compound", "VOC"), x.value); }); }
+    (w.alerts || []).forEach(function (a) {
+      var c = a.severity === "Severe" || a.severity === "Extreme" ? "crit" : a.severity === "Moderate" ? "warn" : "";
+      wl += '<div class="row"><span class="' + (c || "warn") + '-text">⚠ ' + esc(a.event) + "</span><b>" + esc(a.severity) + "</b></div>";
+      if (c === "crit" || (c === "warn" && wlvl !== "crit")) wlvl = c; ticker.push("NWS: " + a.event);
+    });
+    $("weather").innerHTML = wl; level($("p-weather"), wlvl); $("w-src").textContent = w.aqi ? "IQAir" : "";
+
+    // network
+    var nl = "", nlvl = "", inet = n.internet;
+    if (inet) {
+      nl += row("Internet", { up: "online", down: "DOWN", degraded: "degraded", stale: "no ping data" }[inet] || inet, inet === "up" ? "ok-text" : inet === "down" ? "crit-text" : "warn-text");
+      if (n.rtt_ms != null) nl += row("Latency · loss", n.rtt_ms + " ms · " + n.loss + "%");
+      if (n.outages_today) nl += row("Outages today", n.outages_today, "warn-text");
+      nlvl = inet === "down" ? "crit" : inet === "up" ? "" : "warn";
+      chips.push(["Net " + (inet === "up" ? "nominal" : inet), inet === "up" ? "ok" : inet === "down" ? "crit" : "warn"]);
+    }
+    (n.wan || []).forEach(function (x) { nl += row(x.label, x.state, x.state === "online" ? "ok-text" : x.state === "offline" ? "warn-text" : "");
+      if (x.state === "offline" && !nlvl) nlvl = "warn"; });
+    var sl_on = (n.starlink || []).filter(function (x) { return x.on; });
+    sl_on.forEach(function (x) { nl += row(x.name, "ACTIVE", "warn-text"); nlvl = nlvl || "warn"; ticker.push(x.name); });
+    if ((n.starlink || []).length && !sl_on.length) nl += row("Starlink", "nominal", "ok-text");
+    $("network").innerHTML = nl || none("No network data yet."); level($("p-network"), nlvl);
+
+    // airspace
+    var a = s.airspace || {}, al = "", alvl = "";
+    blips = [];
+    (a.drones || []).forEach(function (d) { if (d.miles != null && d.dir) blips.push({ kind: "drone", miles: d.miles, deg: DIRS[d.dir] || 0 }); });
+    (a.aircraft || []).forEach(function (x) { if (x.miles != null && x.dir) blips.push({ kind: "air", miles: x.miles, deg: DIRS[x.dir] || 0 }); });
+    if (a.sensor) al += row("Remote ID sensor", a.sensor, a.sensor === "online" ? "ok-text" : "warn-text");
+    (a.tfrs || []).forEach(function (f) { al += row(f.type + (f.uas ? " · drones" : ""), f.inside ? "over the house" : f.miles + " mi", f.inside ? "warn-text" : ""); if (f.inside) alvl = "warn"; });
+    al += items(a.drones, function (d) { return '<li><span class="t">' + esc(d.at) + '</span><span class="warn-text">' + esc(d.model) + " · " + esc(d.distance) + (d.dir ? " " + esc(d.dir) : "") + "</span></li>"; });
+    al += items(a.aircraft, function (x) { return '<li><span class="t">' + esc(x.at) + '</span><span class="crit-text">' + esc(x.what) + " · " + esc(x.agl) + " ft</span></li>"; });
+    if (!(a.drones || []).length && !(a.aircraft || []).length) al += none("Skies clear. No drones in 24 h, no low aircraft.");
+    else ticker.push((a.drones || []).length + " drone sighting(s) in 24 h");
+    $("airspace").innerHTML = al; level($("p-airspace"), alvl);
+
+    // perimeter
+    var pl = "", plvl = "";
+    (sec.safety || []).concat((sec.alarms || []).map(function (x) { return x.what + " · " + x.device; })).forEach(function (x) {
+      pl += '<div class="row"><span class="crit-text">⚠ ' + esc(x) + '</span><b class="crit-text">ALARM</b></div>'; plvl = "crit"; ticker.unshift("ALARM: " + x); });
+    (sec.locks || []).forEach(function (l) { pl += row(l.name, l.state, l.state === "locked" ? "ok-text" : "warn-text"); if (l.state !== "locked" && !plvl) plvl = "warn"; });
+    var op = sec.open || [];
+    if (op.length) pl += row("Open (" + op.length + ")", op.slice(0, 3).join(", ") + (op.length > 3 ? " +" + (op.length - 3) : ""), "warn-text");
+    if (sec.devices_offline && !/^0 of /.test(sec.devices_offline)) pl += row("Devices offline", sec.devices_offline);
+    if (sec.raid) pl += row("Recorder RAID", "rebuild " + sec.raid.progress + "% · " + sec.raid.eta_h + " h", "warn-text");
+    if ((sec.low_batteries || []).length) pl += row("Low batteries", sec.low_batteries.length + " devices", "warn-text");
+    pl += '<div class="sub-h">Cameras · 12 h</div>' + (items((sec.detections || []).slice(0, 6), function (d) { return '<li><span class="t">' + esc(d.at) + "</span><span>" + esc(d.camera) + " · " + esc((d.types || []).join(", ")) + "</span></li>"; }) || none("No detections."));
+    $("security").innerHTML = pl; level($("p-security"), plvl);
+    if (plvl === "crit") chips.push(["Alarm", "crit"]);
+
+    // outside world
+    var h = s.hazards || {}, tr = s.traffic || {}, ol = "", olvl = "";
+    (h.quakes || []).forEach(function (q) { ol += row("M" + q.mag + " " + q.place, q.miles + " mi " + q.dir, "warn-text"); olvl = "warn"; ticker.push("Earthquake M" + q.mag + " " + q.place); });
+    (h.fires || []).forEach(function (f) { ol += row(f.name, f.miles + " mi " + f.dir + (f.contained != null ? " · " + f.contained + "%" : ""), f.miles <= 25 ? "warn-text" : ""); if (f.miles <= 25) olvl = "warn"; });
+    if (tr.updated) {
+      ol += row("Traffic · " + tr.updated, (tr.accidents || []).length + " accidents · " + (tr.closures || []).length + " closures");
+      ol += items((tr.accidents || []).slice(0, 3), function (x) { return '<li class="plain"><span class="warn-text">' + esc(x.text) + (x.miles != null ? " · " + x.miles + " mi" : "") + "</span></li>"; });
+      (tr.accidents || []).slice(0, 2).forEach(function (x) { ticker.push(x.text); });
+      $("credit").textContent = tr.credit || "";
+    }
+    var car = s.vehicle || {};
+    if (car.battery != null) ol += row(car.name || "Car", Math.round(car.battery) + "%" + (car.range != null ? " · " + Math.round(car.range) + " mi" : "") + (car.charging ? " · " + car.charging : ""));
+    else if (car.status) ol += row("Car", "asleep");
+    $("outside").innerHTML = ol || none("All quiet outside."); level($("p-outside"), olvl);
+
+    // alert log + ticker
+    $("alerts").innerHTML = items((v.alerts || []).slice(0, 5), function (x) { return '<li><span class="t">' + esc(x.at) + '</span><span class="clamp">' + esc(x.text) + "</span></li>"; }) || none("No alerts in 24 h.");
+    (v.alerts || []).slice(0, 4).forEach(function (x) { ticker.push(x.at + " " + x.text); });
+    if (!ticker.length) ticker.push("All systems nominal.");
+    var tt = ticker.join("   ◆   ");
+    if ($("ticker-text").textContent !== tt) { $("ticker-text").textContent = tt; $("ticker").style.setProperty("--dur", Math.max(30, tt.length / 6) + "s"); }
+
+    $("chips").innerHTML = chips.map(function (c) { return '<span class="chip ' + c[1] + '">' + esc(c[0]) + "</span>"; }).join("");
+    fresh();
+  }
+
+  function gate(msg) { $("gate").hidden = false; if (!last) $("app").hidden = true; $("gate-msg").textContent = msg; }
+
+  // ---------- data sources ----------
+  if (window.JARVIS_SOURCE === "ws") {
+    getAudio = function (a) { return Promise.resolve("audio/latest.m4a?id=" + encodeURIComponent(a.id)); };
+    var connect = function () {
+      var ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws" + location.search);
+      ws.onmessage = function (m) { var d; try { d = JSON.parse(m.data); } catch (e) { return; }
+        if (d.type === "reload") { if (!speaking) location.reload(); return; }
+        if (d.type === "audio") { maybePlay({ id: d.id }); return; }
+        render(d); };
+      ws.onclose = function () { setTimeout(connect, 3000); };
+    };
+    connect();
+  } else {
+    // Remote: AES-GCM encrypted snapshot and audio. The key lives in the #fragment, which the browser never sends.
+    var m = /(?:^|[#&])k=([A-Za-z0-9_-]+)/.exec(location.hash);
+    if (!m) { gate("This display needs its private link (with #k=…)."); return; }
+    var b64 = function (s) { s = s.replace(/-/g, "+").replace(/_/g, "/"); while (s.length % 4) s += "=";
+      return Uint8Array.from(atob(s), function (c) { return c.charCodeAt(0); }); };
+    if (!window.crypto || !crypto.subtle) { gate("This browser can't decrypt the display (needs HTTPS)."); return; }
+    var keyP = crypto.subtle.importKey("raw", b64(m[1]), "AES-GCM", false, ["decrypt"]);
+    var open = function (name) {
+      return fetch(name + "?t=" + Date.now(), { cache: "no-store" })
+        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(function (box) { return keyP.then(function (k) { return crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(box.iv) }, k, b64(box.ct)); }); });
+    };
+    getAudio = function () { return open("audio.enc").then(function (buf) { return URL.createObjectURL(new Blob([buf], { type: "audio/mp4" })); }); };
+    var pull = function () {
+      open("status.enc").then(function (buf) { render(JSON.parse(new TextDecoder().decode(buf))); })
+        .catch(function (e) { if (!last) gate(e && e.name === "OperationError" ? "The key in this link doesn't match." : "No data yet (" + (e && e.message) + ")."); });
+    };
+    pull(); setInterval(pull, 15000);
+    // reload when a new version of this page is published (the #key survives the reload)
+    var ver = null;
+    var checkVersion = function () {
+      fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(function (r) { return r.ok ? r.text() : null; })
+        .then(function (t) { if (!t) return; t = t.trim(); if (ver === null) ver = t; else if (t !== ver && !speaking) location.reload(); })
+        .catch(function () {});
+    };
+    checkVersion(); setInterval(checkVersion, 60000);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
