@@ -2087,7 +2087,8 @@ AIRSPACE: Optional[AirspaceMonitor] = None
 #    persistent request ledger capped at `max_requests_per_hour` (default 40),
 #    honour RateLimit-Remaining and 429 Retry-After;
 #  - keep information current (2.a): cleared events are dropped every poll;
-#  - acknowledge the source (5.b): spoken output says "data provided by 511.org";
+#  - acknowledge the source (5.b): spoken output says "data provided by 511.org"
+#    (traffic.attribution, default true; a private install may turn it off);
 #  - no 511 marks in naming/branding (5.c): this module is just "traffic".
 # Responses echo the API key (pagination.next_url), so URLs and bodies are never logged.
 
@@ -2344,7 +2345,8 @@ class TrafficMonitor:
         acc = [fmt(i) for i in self.incidents if i["accident"]]
         other = [fmt(i) for i in self.incidents if not i["accident"]]
         clo = [fmt(i) for i in self.closures]
-        lines = ["%s County, as of %s (data provided by 511.org):" % (self.county, self.updated)]
+        credit = " (data provided by 511.org)" if self.tcfg.get("attribution", True) else ""
+        lines = ["%s County, as of %s%s:" % (self.county, self.updated, credit)]
         lines += ["Accidents:"] + (acc or ["- none"])
         lines += ["Road closures:"] + (clo or ["- none"])
         if other:

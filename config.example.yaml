@@ -139,8 +139,8 @@ mqtt:
     - {topic: http_weatherflow, field: fields.obs_0_air_temperature, scale: 1.8, offset: 32, decimals: 0, label: Home weather station temperature, unit: F, max_age_minutes: 90}
     - {topic: http_weatherflow, field: fields.obs_0_feels_like, scale: 1.8, offset: 32, decimals: 0, label: Feels like, unit: F, max_age_minutes: 90}
     - {topic: http_weatherflow, field: fields.obs_0_relative_humidity, decimals: 0, label: Humidity, unit: "%", max_age_minutes: 90}
-    - {topic: http_weatherflow, field: fields.obs_0_wind_avg, scale: 2.237, decimals: 0, label: Wind, unit: mph, max_age_minutes: 90}
-    - {topic: http_weatherflow, field: fields.obs_0_wind_gust, scale: 2.237, decimals: 0, label: Wind gusts, unit: mph, max_age_minutes: 90}
+    - {topic: http_weatherflow, field: fields.obs_0_wind_avg, scale: 2.237, decimals: 0, label: Wind measured at the house (station reports m/s; converted), unit: mph, max_age_minutes: 90}
+    - {topic: http_weatherflow, field: fields.obs_0_wind_gust, scale: 2.237, decimals: 0, label: Wind gusts measured at the house, unit: mph, max_age_minutes: 90}
     - {topic: http_weatherflow, field: fields.obs_0_precip_accum_local_day, scale: 0.03937, decimals: 2, label: Rain today, unit: inches, max_age_minutes: 90}
     - {topic: http_weatherflow, field: fields.obs_0_uv, label: UV index, max_age_minutes: 90}
     - {topic: http_weatherflow, field: fields.obs_0_sea_level_pressure, decimals: 0, label: Pressure, unit: hPa, max_age_minutes: 90}
@@ -599,6 +599,16 @@ prompt: |
      strong wind coming today or tomorrow. If an earlier briefing already
      covered this and nothing has meaningfully changed, skip the outlook
      and just give the temperature.
+     Wind: keep measured and forecast wind clearly apart. Current wind comes
+     only from the home weather station (Wind / Wind gusts in the home
+     status, measured at the house, in mph); say it as measured ("a light
+     3 miles per hour at the house"). Forecast wind comes from the NWS
+     forecast, which covers the surrounding grid area including the ridges
+     and usually runs well above what the sheltered house sees: always call
+     it a forecast, give the sustained range before the gusts ("forecast
+     12 to 21, gusting to 39 on the ridges"), and only bring up forecast
+     gusts of 25 mph or more. All wind speeds are already in miles per hour;
+     never convert them.
   4. Local alerts, only if one is active right now for {location} and the
      surrounding area (use the hazards section first; web search for the rest): Red Flag or fire weather warnings, poor air quality
      or smoke, PG&E power shutoffs or outages, a Bay Area earthquake of
