@@ -65,5 +65,16 @@ class UnifiAlarmTimestamps(unittest.TestCase):
         self.assertFalse(any("tampering" in l for l in u.summary(now + dt.timedelta(hours=2))))
 
 
+class TextNumbers(unittest.TestCase):
+    """Regression: a sensor publishing its reading as plain text ("19.74", Celsius)
+    skipped the C -> F conversion, so briefings called a 67 F wine room "19 degrees"."""
+
+    def test_text_numbers_are_converted(self):
+        spec = {"scale": 1.8, "offset": 32, "decimals": 0, "unit": "F"}
+        self.assertEqual(jarvis.format_value("19.74", spec), "68 F")
+        self.assertEqual(jarvis.format_value(19.74, spec), "68 F")
+        self.assertEqual(jarvis.format_value("online", {}), "online")
+
+
 if __name__ == "__main__":
     unittest.main()

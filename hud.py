@@ -71,6 +71,7 @@ def readings(j, now: dt.datetime) -> Dict[str, list]:
             if raw is None:
                 continue
             fmt = j.format_value(raw, spec)
+            raw = j.numeric(raw)  # numbers sent as text, e.g. "19.74"
             if isinstance(raw, (int, float)) and not isinstance(raw, bool):
                 # same unit conversion as the briefing text (e.g. W -> kW, C -> F)
                 raw = raw * float(spec.get("scale", 1)) + float(spec.get("offset", 0))

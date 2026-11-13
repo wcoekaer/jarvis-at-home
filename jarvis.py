@@ -598,9 +598,21 @@ class MqttState:
         return out[:int(self.cfg.get('max_lines', 100))]
 
 
+def numeric(value):
+    """Numbers sent as plain text (e.g. a UniFi sensor's "19.74") become floats,
+    so unit conversion (scale/offset, e.g. C -> F) applies to them too."""
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return value
+    return value
+
+
 def format_value(value, spec: dict) -> Optional[str]:
     if value is None:
         return None
+    value = numeric(value)
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         decimals = int(spec.get("decimals", 1))
         value = round(value * float(spec.get("scale", 1)) + float(spec.get("offset", 0)), decimals)
