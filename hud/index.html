@@ -548,8 +548,13 @@ footer.foot::before { content: ""; position: absolute; left: 0; right: 0; top: 0
 
     // perimeter
     var pl = "", plvl = "";
-    (sec.safety || []).concat((sec.alarms || []).map(function (x) { return x.what + " · " + x.device; })).forEach(function (x) {
+    (sec.safety || []).forEach(function (x) {
       pl += '<div class="row"><span class="crit-text">⚠ ' + esc(x) + '</span><b class="crit-text">ALARM</b></div>'; plvl = "crit"; ticker.unshift("ALARM: " + x); });
+    (sec.alarms || []).forEach(function (x) {
+      var c = x.level === "warn" ? "warn" : "crit";
+      pl += '<div class="row"><span class="' + c + '-text">⚠ ' + esc(x.what + " · " + x.device) + '</span><b class="' + c + '-text">' + esc(x.at || (c === "crit" ? "ALARM" : "")) + "</b></div>";
+      if (c === "crit") plvl = "crit"; else if (!plvl) plvl = "warn";
+      ticker.unshift((c === "crit" ? "ALARM: " : "") + x.what + " · " + x.device); });
     (sec.locks || []).forEach(function (l) { pl += row(l.name, l.state, l.state === "locked" ? "ok-text" : "warn-text"); if (l.state !== "locked" && !plvl) plvl = "warn"; });
     var op = sec.open || [];
     if (op.length) pl += row("Open (" + op.length + ")", op.slice(0, 3).join(", ") + (op.length > 3 ? " +" + (op.length - 3) : ""), "warn-text");

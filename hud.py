@@ -229,8 +229,19 @@ def build_status(j, cfg: dict, now: Optional[dt.datetime] = None) -> dict:
                                if dt.datetime.fromisoformat(w) >= cutoff), reverse=True)[:10]
                 out["detections"] = [{"at": t.strftime("%-I:%M %p"), "camera": u.names.get(cam) or "camera " + cam[-4:],
                                       "types": types} for t, types, cam in dets]
-                out["alarms"] = [{"what": k.split(" ", 1)[1], "device": u.names.get(k.split(" ", 1)[0], "sensor"),
-                                  "at": v[11:16]} for k, v in u.alarms.items()]
+                # Same rule as the briefings: the sensor keeps reporting the time of its
+                # LAST occurrence, so only show ones that happened recently.
+                show = dt.timedelta(minutes=float(u.cfg.get("alarm_show_minutes", 60)))
+                names = getattr(j, "ALARM_NAMES", {})
+                for k, v in u.alarms.items():
+                    t = dt.datetime.fromisoformat(v)
+                    if now - t > show:
+                        continue
+                    dev, kind = k.split(" ", 1)
+                    tamper = kind == "tamperingDetectedAt"
+                    out["alarms"].append({"what": "Sensor tampering" if tamper else names.get(kind, kind),
+                                          "device": u.names.get(dev, "sensor"), "at": t.strftime("%-I:%M %p"),
+                                          "level": "warn" if tamper else "crit"})
                 raid = [{"progress": round(rs["progress"] * 100), "eta_h": round((rs.get("eta_ms") or 0) / 3.6e6)}
                         for rs in u.raid_sync.values()
                         if now - dt.datetime.fromisoformat(rs["seen"]) < dt.timedelta(minutes=30)]
