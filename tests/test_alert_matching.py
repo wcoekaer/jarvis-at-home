@@ -76,5 +76,31 @@ class TextNumbers(unittest.TestCase):
         self.assertEqual(jarvis.format_value("online", {}), "online")
 
 
+class RainNowcastAlerts(unittest.TestCase):
+    def payload(self, now, rain_from_min=None, raining=False):
+        base = int(now.timestamp())
+        minutely = [{"dt": base + 60 * i, "precipitation": (0.8 if (raining or (rain_from_min is not None and i >= rain_from_min)) else 0)}
+                    for i in range(61)]
+        return {"current": {"weather": [{"description": "clouds"}], **({"rain": {"1h": 0.5}} if raining else {})},
+                "minutely": minutely}
+
+    def test_announces_rain_once(self):
+        import feeds
+        now = dt.datetime(2026, 11, 13, 9, 0, tzinfo=dt.timezone.utc)
+        f = feeds.RainNowcast({}, (0.0, 0.0)); f.state = {}; f.primed = True
+        events = []; f.listeners.append(events.append)
+        f.evaluate(self.payload(now, rain_from_min=12), now)
+        self.assertEqual([e["minutes"] for e in events], ["12"])
+        f.evaluate(self.payload(now + dt.timedelta(minutes=10), rain_from_min=2), now + dt.timedelta(minutes=10))
+        self.assertEqual(len(events), 1)                       # no repeat within 2 hours
+        f.evaluate(self.payload(now, raining=True), now)
+        self.assertEqual(len(events), 1)                       # already raining: nothing new
+        g = feeds.RainNowcast({}, (0.0, 0.0)); g.state = {}; g.primed = True
+        g.listeners.append(events.append)
+        g.evaluate(self.payload(now), now)
+        self.assertEqual(len(events), 1)                       # dry hour
+        self.assertIn("No rain expected", g.lines(now)[0])
+
+
 if __name__ == "__main__":
     unittest.main()

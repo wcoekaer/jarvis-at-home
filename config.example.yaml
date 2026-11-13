@@ -234,6 +234,11 @@ feeds:
     poll_seconds: 3600
   weather_alerts:              # National Weather Service alerts for the house's exact point
     poll_seconds: 300
+  rain_nowcast:                # OpenWeather One Call minute-by-minute rain (OPENWEATHER_API_KEY)
+    poll_seconds: 600          # ~144 calls/day; keep the OpenWeather daily limit at 1,000
+    lead_minutes: 30           # announce rain due within this many minutes
+    threshold_mm_per_hour: 0.1
+    repeat_minutes: 120        # don't announce again within this time
   earthquakes:                 # USGS real-time feed; announce if mag >= M within N miles
     poll_seconds: 120
     tiers: [[3.0, 50], [4.5, 150], [6.0, 500]]
@@ -393,6 +398,12 @@ alerts:
     cooldown_minutes: 30
     messages:
       - "A {aircraft} has been circling low to the {direction} for {minutes} minutes."
+  - name: rain-soon
+    kind: rain_soon
+    cooldown_minutes: 60
+    messages:
+      - "A quick weather note: rain is expected to start {when}."
+      - "You may want to bring anything in from outside, sir. Rain is due {when}."
   # Traffic (see traffic:). Add max_miles: 10 to limit to nearby, or
   # severities: [Major, Severe]. The 511 credit line is required (agreement 5.b).
   - name: traffic-accident

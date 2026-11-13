@@ -546,10 +546,77 @@ class WeatherForecast(Feed):
         return out
 
 
+class RainNowcast(Feed):
+    """OpenWeather One Call 3.0 minute-by-minute precipitation for the next hour:
+    announces rain about to start ("in about 12 minutes"). Needs OPENWEATHER_API_KEY
+    with the "One Call by Call" subscription (1,000 free calls/day; ~144 used at
+    the default 10-minute interval). While the key is rejected it retries hourly."""
+
+    name = "rain_nowcast"
+
+    async def poll(self, session) -> None:
+        import time as _time
+
+        key = os.environ.get("OPENWEATHER_API_KEY")
+        if not key or _time.time() < self.state.get("blocked_until", 0):
+            return
+        params = {"lat": "%.4f" % self.home[0], "lon": "%.4f" % self.home[1], "units": "imperial",
+                  "exclude": "daily,alerts", "appid": key}
+        async with session.get("https://api.openweathermap.org/data/3.0/onecall", params=params,
+                               headers={"User-Agent": USER_AGENT}) as r:
+            if r.status == 401:
+                if not self.state.get("blocked_until"):
+                    log.warning("rain nowcast: OpenWeather rejected the key (not active yet, or no One Call "
+                                "by Call subscription); retrying hourly")
+                self.state["blocked_until"] = _time.time() + 3600
+                return
+            if r.status != 200:
+                raise RuntimeError("rain_nowcast HTTP %s" % r.status)
+            data = json.loads(await r.text())
+        self.state.pop("blocked_until", None)
+        self.evaluate(data, dt.datetime.now(dt.timezone.utc))
+
+    def evaluate(self, data: dict, now: dt.datetime) -> None:
+        threshold = float(self.cfg.get("threshold_mm_per_hour", 0.1))
+        lead = float(self.cfg.get("lead_minutes", 30))
+        minutely = data.get("minutely") or []
+        current = data.get("current") or {}
+        raining_now = bool((current.get("rain") or {}).get("1h")) or (
+            bool(minutely) and float(minutely[0].get("precipitation") or 0) >= threshold)
+        start = None
+        for m in minutely:
+            t = dt.datetime.fromtimestamp(m["dt"], dt.timezone.utc)
+            if float(m.get("precipitation") or 0) >= threshold and t > now:
+                start = t
+                break
+        mins = round((start - now).total_seconds() / 60) if start else None
+        self.state["now"] = {"raining": raining_now, "starts_in_min": mins,
+                             "desc": ((current.get("weather") or [{}])[0]).get("description", ""),
+                             "at": now.isoformat(timespec="minutes")}
+        last = self.state.get("announced")
+        quiet = dt.timedelta(minutes=float(self.cfg.get("repeat_minutes", 120)))
+        recently = last and now - dt.datetime.fromisoformat(last) < quiet
+        if not raining_now and mins is not None and 0 < mins <= lead and not recently:
+            self.state["announced"] = now.isoformat()
+            self.emit({"kind": "rain_soon", "minutes": str(max(1, mins)),
+                       "when": "in about %d minute%s" % (max(1, mins), "" if mins == 1 else "s")})
+
+    def lines(self, now):
+        n = self.state.get("now")
+        if not n:
+            return []
+        if n["raining"]:
+            return ["- Raining at the house now (OpenWeather nowcast)"]
+        if n["starts_in_min"] is not None:
+            return ["- Rain expected to start in about %d minutes (OpenWeather nowcast)" % n["starts_in_min"]]
+        return ["- No rain expected in the next hour (OpenWeather nowcast)"]
+
+
 FEEDS = {"weather_alerts": WeatherAlerts, "earthquakes": Earthquakes, "wildfires": Wildfires,
          "outdoor_air": OutdoorAir, "flight_restrictions": FlightRestrictions, "low_aircraft": LowAircraft}
 FEEDS['solar_weather'] = SolarWeather
 FEEDS['forecast'] = WeatherForecast
+FEEDS['rain_nowcast'] = RainNowcast
 
 
 def build_feeds(cfg: dict) -> Dict[str, Feed]:
@@ -566,6 +633,8 @@ def build_feeds(cfg: dict) -> Dict[str, Feed]:
         if name == 'solar_weather' and not c.get('enabled', False):
             continue
         if name == 'outdoor_air' and not os.environ.get('IQAIR_API_KEY'):
+            continue
+        if name == 'rain_nowcast' and not os.environ.get('OPENWEATHER_API_KEY'):
             continue
         if name in ('flight_restrictions', 'low_aircraft') and not (os.environ.get('AIRSPACE_URL') and os.environ.get('AIRSPACE_API_KEY')):
             continue
