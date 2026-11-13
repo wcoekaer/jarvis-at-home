@@ -523,8 +523,14 @@ class MqttState:
         lines = []
         for spec in self.cfg.get("topics", []):
             max_age = dt.timedelta(minutes=int(spec.get("max_age_minutes", default_age)))
-            fresh = {t: v for t, (v, seen) in values.items() if dt.timedelta(0) <= now - seen <= max_age
-                     and self.observation(v, seen)[2]}
+            if spec.get("stateful"):
+                # Retained state published only when it changes (e.g. device
+                # availability): valid while its publisher is alive, whatever its age.
+                fresh = {t: v for t, (v, seen) in values.items()
+                         if self.publisher_alive(t, values) and self.observation(v, seen)[2]}
+            else:
+                fresh = {t: v for t, (v, seen) in values.items() if dt.timedelta(0) <= now - seen <= max_age
+                         and self.observation(v, seen)[2]}
             matched = sorted(t for t in fresh if topic_matches(spec["topic"], t))
             label = spec.get("label", spec["topic"])
             if "count_value" in spec:
@@ -560,7 +566,8 @@ class MqttState:
                 for mac, name in sorted(self.unifi.camera_macs.items(), key=lambda kv: kv[1]):
                     avail = values.get("/unifi/protect/%s/availability" % mac)
                     if avail:
-                        status = 'UNKNOWN (stale)' if now - avail[1] > dt.timedelta(minutes=default_age) else \
+                        status = 'UNKNOWN (UniFi bridge offline)' if not self.publisher_alive(
+                            "/unifi/protect/%s/availability" % mac, values) else \
                             'OFFLINE' if avail[0] == 'offline' else 'online'
                         cams.append('- Camera %s: %s' % (name, status))
                 lines = self.unifi.summary(now) + cams + lines
@@ -568,6 +575,17 @@ class MqttState:
             with self.lock:
                 lines = self.internet.summary(now) + lines
         return "\n".join(lines[:int(self.cfg.get("max_lines", 100))])
+
+    def publisher_alive(self, topic: str, values: dict) -> bool:
+        """For retained state topics like /unifi/protect/<mac>/availability, the
+        publisher's own status (/unifi/protect/availability) says whether the
+        retained values are current. Topics without such a status are trusted."""
+        parts = topic.rstrip("/").split("/")
+        if len(parts) >= 3 and parts[-1] == "availability":
+            status = values.get("/".join(parts[:-2] + ["availability"]))
+            if status is not None:
+                return status[0] == "online"
+        return True
 
     def facts(self, now):
         with self.lock:
@@ -585,7 +603,10 @@ class MqttState:
                     continue
                 data, _, reachable = self.observation(payload, seen)
                 age = (now - seen).total_seconds()
-                fresh = reachable and 0 <= age <= float(spec.get('max_age_minutes', self.cfg.get('max_age_minutes', 720))) * 60
+                if spec.get('stateful'):
+                    fresh = reachable and self.publisher_alive(topic, values)
+                else:
+                    fresh = reachable and 0 <= age <= float(spec.get('max_age_minutes', self.cfg.get('max_age_minutes', 720))) * 60
                 value = format_value(extract_field(payload, spec.get('field')), spec) if fresh else 'UNKNOWN (stale or unreachable)'
                 if value is None or fresh and spec.get('only_values') and value not in spec['only_values']:
                     continue
@@ -2775,7 +2796,7 @@ def main() -> int:
         MQTT.condition_topics = sorted({r['topic'] for r in cfg.get('conditions', []) if r.get('enabled', True)})
         if args.cmd == "test":
             MQTT.start()
-            time.sleep(3)  # collect retained messages before building the prompt
+            time.sleep(15)  # collect retained messages and a few live readings (Powerpack ~10 s)
 
     if args.cmd == "run":
         asyncio.run(scheduler(cfg))

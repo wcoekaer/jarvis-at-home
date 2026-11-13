@@ -134,7 +134,7 @@ mqtt:
     # A stock price published on your broker (live price)
     - {topic: /stock/acme, field: price, label: ACME share price, unit: USD, decimals: 2, max_age_minutes: 60}
     # UniFi Protect device availability
-    - {topic: /unifi/protect/+/availability, count_value: offline, label: UniFi Protect devices offline, max_age_minutes: 1440}
+    - {topic: /unifi/protect/+/availability, count_value: offline, stateful: true, label: UniFi Protect devices offline, max_age_minutes: 1440}
     # Local weather station (WeatherFlow Tempest, published hourly, metric -> US units)
     - {topic: http_weatherflow, field: fields.obs_0_air_temperature, scale: 1.8, offset: 32, decimals: 0, label: Home weather station temperature, unit: F, max_age_minutes: 90}
     - {topic: http_weatherflow, field: fields.obs_0_feels_like, scale: 1.8, offset: 32, decimals: 0, label: Feels like, unit: F, max_age_minutes: 90}
@@ -159,9 +159,11 @@ mqtt:
        include: [Contact Sensor State, Door State],
        exclude: [Powerpack]}         # Powerpack flags duplicate the direct Powerpack data
     - {topic: "homekit/MyHome/+/+/+", field: text, label: "HomeKit SAFETY", topic_label_parts: 3, max_age_minutes: 1440,
-       include: [Leak Detected, Smoke Detected, Carbon Monoxide Detected], only_values: [DETECTED]}
+       include: [Leak Detected, Smoke Detected, Carbon Monoxide Detected], only_values: [DETECTED],
+       exclude: [USL, Environmental, Environment]}   # UniFi sensors: covered directly by the UniFi tracker
     - {topic: "homekit/MyHome/+/+/+", field: text, label: "HomeKit low battery", topic_label_parts: 2, max_age_minutes: 1440,
-       include: [Status Low Battery], only_values: [low battery]}
+       include: [Status Low Battery], only_values: [low battery],
+       exclude: [USL, Environmental, Environment]}   # UniFi sensors: covered directly by the UniFi tracker
     - {topic: "homekit/+/+/+/+", field: text, label: "Indoor air", topic_label_parts: 3, max_age_minutes: 180,
        include: [Air Quality, PM2.5 Density, PM10 Density, Carbon dioxide Level, Volatile Organic Compound Density]}
 
