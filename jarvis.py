@@ -2528,12 +2528,36 @@ def upcoming(cfg: dict, after: dt.datetime, horizon_days: int = 8) -> List[Tuple
     return events
 
 
+STARTED_FILE = Path(os.path.expanduser("~/Library/Caches/jarvis/broadcasts-started.json"))
+
+
+def load_started_slots() -> set:
+    """(broadcast name, slot datetime) pairs already started, from the last day."""
+    try:
+        cutoff = dt.datetime.now() - dt.timedelta(days=1)
+        slots = {(n, dt.datetime.fromisoformat(w)) for n, w in json.loads(STARTED_FILE.read_text())}
+        return {s for s in slots if s[1] > cutoff}
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
+def save_started_slots(started: set) -> None:
+    try:
+        STARTED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STARTED_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(sorted([n, w.isoformat()] for n, w in started)))
+        tmp.replace(STARTED_FILE)
+    except OSError as e:
+        log.warning("could not save started broadcasts: %s", e)
+
+
 async def scheduler(cfg: dict) -> None:
     lead = dt.timedelta(seconds=int(cfg["playback"].get("prepare_seconds", 180)))
     # An event is started once its prep window opens. Events up to 2 minutes
     # past due (e.g. after a restart or wake from sleep) still fire; older ones
-    # are skipped rather than played late.
-    started: set = set()
+    # are skipped rather than played late. Started slots are remembered on disk,
+    # so a restart in the middle of a briefing doesn't play it a second time.
+    started: set = load_started_slots()
     tasks: set = set()
     global QUIET
     QUIET = QuietMode(cfg)
@@ -2595,6 +2619,7 @@ async def scheduler(cfg: dict) -> None:
             prep_at = when - lead
             if prep_at <= now <= when + dt.timedelta(minutes=2):
                 started.add(key)
+                save_started_slots(started)
                 if QUIET and QUIET.active(now):
                     log.info("[%s] skipped (quiet mode)", b["name"])
                     continue

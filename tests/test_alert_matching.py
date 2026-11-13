@@ -102,5 +102,26 @@ class RainNowcastAlerts(unittest.TestCase):
         self.assertIn("No rain expected", g.lines(now)[0])
 
 
+class BroadcastSlotsSurviveRestart(unittest.TestCase):
+    """Regression: a restart during the 7 PM briefing made the new process play it
+    again (slots up to 2 minutes overdue still fire, and 'started' was in memory only)."""
+
+    def test_started_slots_round_trip(self):
+        import tempfile
+        old = jarvis.STARTED_FILE
+        with tempfile.TemporaryDirectory() as d:
+            jarvis.STARTED_FILE = Path(d) / "started.json"
+            try:
+                slot = ("hourly", dt.datetime.now().replace(second=0, microsecond=0))
+                self.assertEqual(jarvis.load_started_slots(), set())
+                jarvis.save_started_slots({slot})
+                self.assertIn(slot, jarvis.load_started_slots())        # the restarted process skips it
+                stale = ("hourly", dt.datetime.now() - dt.timedelta(days=2))
+                jarvis.save_started_slots({slot, stale})
+                self.assertNotIn(stale, jarvis.load_started_slots())    # old slots are forgotten
+            finally:
+                jarvis.STARTED_FILE = old
+
+
 if __name__ == "__main__":
     unittest.main()
