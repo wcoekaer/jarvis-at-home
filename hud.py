@@ -171,6 +171,10 @@ def build_status(j, cfg: dict, now: Optional[dt.datetime] = None) -> dict:
         if air and air.state.get("current"):
             c = air.state["current"]
             out["aqi"] = {"value": c["aqi"], "band": c["band"], "main": c.get("main")}
+        fc = feeds.get("forecast")
+        if fc:
+            out["forecast"] = [{"name": x["name"], "temp": x["temp"], "day": x["day"], "short": x["short"],
+                                "rain": x.get("rain")} for x in fc.state.get("periods", [])[:4]]
         wa = feeds.get("weather_alerts")
         out["alerts"] = [{"event": a["event"], "severity": a["severity"]}
                          for a in (wa.state.get("active", {}).values() if wa else [])]

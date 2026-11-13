@@ -507,9 +507,49 @@ class SolarWeather(Feed):
         self.state.update(grid_url=url, hours=hours)
 
 
+class WeatherForecast(Feed):
+    """NWS forecast for the house's exact point, in 12-hour periods
+    (Today, Tonight, Friday, ...): temperature, conditions, rain chance, wind.
+    The /points lookup (which forecast office and grid cell) is cached."""
+
+    name = "forecast"
+
+    async def poll(self, session) -> None:
+        url = self.state.get("forecast_url")
+        if not url:
+            point = await self.get_json(session, "https://api.weather.gov/points/%.4f,%.4f" % self.home,
+                                        headers={"Accept": "application/geo+json"})
+            url = point["properties"]["forecast"]
+        if not url.startswith("https://api.weather.gov/"):
+            raise ValueError("unexpected NWS forecast URL")
+        data = await self.get_json(session, url, headers={"Accept": "application/geo+json"})
+        periods = []
+        for p in (data.get("properties") or {}).get("periods", [])[:14]:
+            rain = (p.get("probabilityOfPrecipitation") or {}).get("value")
+            periods.append({"name": p.get("name"), "day": bool(p.get("isDaytime")),
+                            "temp": p.get("temperature"), "unit": p.get("temperatureUnit", "F"),
+                            "short": p.get("shortForecast", ""), "detail": p.get("detailedForecast", "")[:400],
+                            "rain": rain, "wind": ("%s %s" % (p.get("windSpeed", ""), p.get("windDirection", ""))).strip(),
+                            "start": p.get("startTime")})
+        if not periods:
+            raise ValueError("NWS returned no forecast periods")
+        self.state.update(forecast_url=url, periods=periods,
+                          updated=(data.get("properties") or {}).get("updated") or dt.datetime.now().isoformat())
+
+    def lines(self, now, count: int = 6):
+        out = []
+        for p in self.state.get("periods", [])[:count]:
+            rain = ", %d%% chance of rain" % p["rain"] if p.get("rain") else ""
+            out.append("- %s: %s %s%s; %s, wind %s. %s" % (
+                p["name"], "high" if p["day"] else "low", "%s°%s" % (p["temp"], p["unit"]), rain,
+                p["short"], p["wind"] or "calm", p["detail"]))
+        return out
+
+
 FEEDS = {"weather_alerts": WeatherAlerts, "earthquakes": Earthquakes, "wildfires": Wildfires,
          "outdoor_air": OutdoorAir, "flight_restrictions": FlightRestrictions, "low_aircraft": LowAircraft}
 FEEDS['solar_weather'] = SolarWeather
+FEEDS['forecast'] = WeatherForecast
 
 
 def build_feeds(cfg: dict) -> Dict[str, Feed]:

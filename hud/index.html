@@ -503,6 +503,13 @@ footer.foot::before { content: ""; position: absolute; left: 0; right: 0; top: 0
       if (wout && !wlvl) wlvl = "warn"; }
     var indoor = s.indoor_air || [];
     if (indoor.length) { wl += '<div class="sub-h">Indoor</div>'; indoor.slice(0, 5).forEach(function (x) { wl += row(x.room + " · " + x.what.replace("Volatile Organic Compound", "VOC"), x.value); }); }
+    if ((w.forecast || []).length) {
+      wl += '<div class="sub-h">Forecast · NWS</div>';
+      w.forecast.forEach(function (f) {
+        var rain = f.rain ? " · " + f.rain + "% rain" : "";
+        wl += row(f.name, (f.day ? "↑" : "↓") + f.temp + "° " + f.short + rain, f.rain >= 60 ? "warn-text" : "");
+      });
+    }
     (w.alerts || []).forEach(function (a) {
       var c = a.severity === "Severe" || a.severity === "Extreme" ? "crit" : a.severity === "Moderate" ? "warn" : "";
       wl += '<div class="row"><span class="' + (c || "warn") + '-text">⚠ ' + esc(a.event) + "</span><b>" + esc(a.severity) + "</b></div>";

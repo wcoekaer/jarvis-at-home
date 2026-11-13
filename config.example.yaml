@@ -555,6 +555,11 @@ prompt: |
   {traffic}
   </traffic>
 
+  National Weather Service forecast for the house (next three days):
+  <forecast>
+  {forecast}
+  </forecast>
+
   Hazards (weather alerts, earthquakes, wildfires, outdoor air):
   <hazards>
   {hazards}
@@ -577,9 +582,12 @@ prompt: |
   2. Always: the current temperature in {location}, in degrees Fahrenheit.
      Prefer the home weather station reading in the home status when it is
      available (it is measured at the house); otherwise use web search.
-  3. Weather: current conditions and the outlook in one short sentence.
-     If an earlier briefing already covered this and nothing has
-     meaningfully changed, skip the outlook and just give the temperature.
+  3. Weather: current conditions and the outlook in one short sentence,
+     taken from the forecast section (the official NWS forecast for the
+     house; use web search only if it is not available). Mention rain or
+     strong wind coming today or tomorrow. If an earlier briefing already
+     covered this and nothing has meaningfully changed, skip the outlook
+     and just give the temperature.
   4. Local alerts, only if one is active right now for {location} and the
      surrounding area (use the hazards section first; web search for the rest): Red Flag or fire weather warnings, poor air quality
      or smoke, PG&E power shutoffs or outages, a Bay Area earthquake of

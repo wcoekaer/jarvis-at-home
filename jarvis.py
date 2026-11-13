@@ -1223,6 +1223,7 @@ def render_prompt(template: str, now: dt.datetime, cfg: dict, facts=None) -> str
         "energy_today": energy or "(not available)",
         "drones": drones or "(not available)",
         "traffic": (TRAFFIC.summary() if TRAFFIC else "") or "(not available)",
+        "forecast": "\n".join(FEEDS["forecast"].lines(now)) if "forecast" in FEEDS else "(not available)",
         "hazards": feed_lines(["weather_alerts", "earthquakes", "wildfires", "outdoor_air"], now, {
             "weather_alerts": "National Weather Service alerts for the house",
             "earthquakes": "Notable earthquakes, last 24 hours (USGS)",
