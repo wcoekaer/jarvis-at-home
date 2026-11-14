@@ -381,23 +381,59 @@ class MqttState:
                         int(self.cfg.get("port", 1883)), keepalive=60)
         c.loop_start()  # paho's own thread; reconnects automatically
         self.client = c
+        if self.cfg.get("discover", True):
+            threading.Thread(target=self._discovery_loop, name="mqtt-discovery", daemon=True).start()
+
+    def wanted_topics(self) -> List[str]:
+        """The topics Jarvis actually uses."""
+        topics = list(self.patterns) + self.condition_topics + ([self.unifi_topic] if self.unifi else []) + \
+            ([self.energy_topic] if self.energy else []) + \
+            ([self.internet_topic] if self.internet else []) + \
+            [self.cfg.get("say_topic", "jarvis/say"), self.cfg.get("brief_topic", "jarvis/brief"),
+             self.cfg.get("homekit_events_topic", "homekit/events"), "homekit/inventory"]
+        return sorted(set(topics))
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code.is_failure:
             log.error("MQTT connect failed: %s", reason_code)
             return
-        topics = list(self.patterns) + self.condition_topics + ([self.unifi_topic] if self.unifi else []) + \
-            ([self.energy_topic] if self.energy else []) + \
-            ([self.internet_topic] if self.internet else []) + \
-            [self.cfg.get("say_topic", "jarvis/say"), self.cfg.get("brief_topic", "jarvis/brief"),
-             self.cfg.get("homekit_events_topic", "homekit/events")]
-        if self.cfg.get("discover", True):
-            topics = ["#"] + [t for t in topics if t.startswith("$")]
-        log.info("MQTT connected; subscribing to %s", ", ".join(topics))
+        # Normally subscribe only to what Jarvis uses; discovery (catching new
+        # feeds) runs in short "#" windows (see _discovery_loop), so bulky
+        # streams like camera snapshots aren't pulled in all the time.
+        topics = self.wanted_topics()
+        self.discovering = False
+        log.info("MQTT connected; subscribing to %d topics", len(topics))
         for t in topics:
             client.subscribe(t)
         if JOURNAL:
             JOURNAL.health('mqtt', 'ok', 'connected', 120)
+
+    def _discovery_loop(self) -> None:
+        """Every discover_every_minutes, listen to everything for
+        discover_window_minutes to catalog new topics, then go back to the
+        topics Jarvis uses. Subscribing to "#" first and dropping the specific
+        subscriptions afterwards (and the reverse) avoids missing messages."""
+        every = float(self.cfg.get("discover_every_minutes", 60)) * 60
+        window = float(self.cfg.get("discover_window_minutes", 3)) * 60
+        time.sleep(float(self.cfg.get("discover_first_after_seconds", 120)))
+        while True:
+            c = self.client
+            if c is not None and c.is_connected():
+                specific = self.wanted_topics()
+                try:
+                    c.subscribe("#")
+                    self.discovering = True
+                    for t in specific:
+                        c.unsubscribe(t)
+                    log.info("MQTT discovery window: listening to all topics for %d s", window)
+                    time.sleep(window)
+                finally:
+                    if self.client is c and c.is_connected():
+                        for t in specific:
+                            c.subscribe(t)
+                        c.unsubscribe("#")
+                    self.discovering = False
+            time.sleep(max(60.0, every - window))
 
     def observation(self, payload, now, retained=False):
         try:
@@ -417,6 +453,12 @@ class MqttState:
         return data, observed, reachable
 
     def _on_message(self, client, userdata, msg):
+        if len(msg.payload) > int(self.cfg.get("max_payload_bytes", 65536)):
+            # e.g. camera snapshot JPEGs: note the topic for discovery, but
+            # don't decode or keep the data
+            with self.lock:
+                self._record(msg.topic, "<%d bytes, not stored>" % len(msg.payload), dt.datetime.now())
+            return
         payload = msg.payload.decode("utf-8", "replace").strip()
         now = dt.datetime.now()
         if msg.topic.startswith("homekit/") and not payload:

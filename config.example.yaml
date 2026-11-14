@@ -214,7 +214,10 @@ mqtt:
     degraded_latency_ms: 150
   say_topic: jarvis/say        # publish text (or {"text","homepods","volume","urgent"}) to have Jarvis say it
   brief_topic: jarvis/brief    # publish a broadcast name (or nothing) to run a briefing now
-  discover: true               # catalog every topic in ~/Library/Caches/jarvis/mqtt-topics.json
+  discover: true               # catalog every topic in ~/Library/Caches/jarvis/mqtt-topics.json ...
+  discover_every_minutes: 60   # ... by listening to all topics (#) for a short window this often;
+  discover_window_minutes: 3   # otherwise only the topics Jarvis uses are subscribed
+  max_payload_bytes: 65536     # larger payloads (camera snapshots) are noted but never decoded or stored
 
 # Drones near the house, from the OSP airspace server (AIRSPACE_URL and
 # AIRSPACE_API_KEY in .env). Only the house Remote ID sensor is used.
