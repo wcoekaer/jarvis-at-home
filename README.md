@@ -235,6 +235,17 @@ reads each value from the device once at startup, then relies on change notifica
 - **Launching:** launchd starts the app through `open -W`. A Catalyst app exec'd directly by
   launchd aborts with `_mainSceneIdentifier should have been set`.
 
+### Speakers that require pairing (HomeView, Apple TV)
+
+HomePods accept Jarvis's audio without pairing (`./jarvis devices` shows them as
+`streamable`). Devices with a screen, such as Apple TV and HomeView, advertise "one-time
+pairing required" under HomeKit access control. `./jarvis pair "<name>"` runs AirPlay PIN
+pairing and saves the credentials in
+`~/Library/Application Support/jarvis/airplay-credentials.json` (mode 600), which playback
+then uses. HomeView didn't show a PIN for this pairing and kept refusing audio with HTTP 470
+("Connection Authorization Required"), even with *Allow Speaker & TV Access* set to
+"Everyone". So for now, use HomePods (or other open AirPlay speakers) for Jarvis.
+
 ## 8. Calendar, Reminders, Mail (JarvisContext)
 
 macOS grants Calendar and Reminders access only to an app bundle that can show a permission
@@ -411,3 +422,5 @@ display is therefore a web page; check that HomeView's Safari keeps it on screen
 | Person alerts never fire for some cameras | they send only motion; see *Camera names* |
 | 511 requests skipped | the rate guard is working; see `traffic.max_requests_per_hour` |
 | CAL FIRE returns 403 | expected; wildfires come from NIFC WFIGS |
+| A speaker shows `needs pairing` / playback fails with HTTP 470 | screen devices (Apple TV, HomeView) need `./jarvis pair`; see section 7 |
+| A HomePod is "not found on the network" | it may be installing a HomePod update or restarting after a rename; retry in a few minutes |

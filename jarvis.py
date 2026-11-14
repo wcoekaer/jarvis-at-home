@@ -1495,12 +1495,35 @@ async def find_devices(names: List[str], timeout: int = 8) -> Dict[str, object]:
     return found
 
 
+CREDENTIALS_FILE = Path(os.path.expanduser("~/Library/Application Support/jarvis/airplay-credentials.json"))
+
+
+def load_airplay_credentials() -> Dict[str, str]:
+    try:
+        return json.loads(CREDENTIALS_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def apply_credentials(name: str, conf) -> None:
+    """Devices that require AirPlay pairing (Apple TV, HomeView...) need the
+    credentials saved by `jarvis pair`; RAOP streaming uses the AirPlay ones."""
+    from pyatv.const import Protocol
+
+    creds = load_airplay_credentials().get(conf.identifier) or load_airplay_credentials().get(name)
+    if creds:
+        for proto in (Protocol.AirPlay, Protocol.RAOP):
+            if conf.get_service(proto):
+                conf.set_credentials(proto, creds)
+
+
 async def play_on(name: str, conf, audio: Path, volume: Optional[float]) -> bool:
     import pyatv
 
     loop = asyncio.get_running_loop()
     atv = None
     try:
+        apply_credentials(name, conf)
         atv = await pyatv.connect(conf, loop)
         if volume is not None:
             try:
@@ -2771,6 +2794,9 @@ def main() -> int:
     t.add_argument("--homepod", action="append", help="override target HomePod(s)")
     cm = sub.add_parser("cameras", help="list cameras seen in UniFi detections")
     cm.add_argument("--watch", action="store_true", help="print detections live (walk past a camera)")
+    pr = sub.add_parser("pair", help="pair with an AirPlay device that requires it (HomeView, Apple TV)")
+    pr.add_argument("device", help="AirPlay name, as shown by `jarvis devices`")
+    pr.add_argument("--pin-file", help="read the PIN from this file instead of the keyboard")
     s = sub.add_parser("say", help="speak text on HomePods")
     s.add_argument("text")
     s.add_argument("--homepod", action="append")
@@ -2816,6 +2842,8 @@ def main() -> int:
         asyncio.run(run_broadcast(b, cfg, dt.datetime.now(), play_audio=not args.no_play))
     elif args.cmd == "cameras":
         return cameras_cmd(cfg, args.watch)
+    elif args.cmd == "pair":
+        return asyncio.run(pair_device(args.device, args.pin_file))
     elif args.cmd == "say":
         homepods = args.homepod or cfg.get("homepods") or []
         with tempfile.TemporaryDirectory(prefix="jarvis-") as tmp:
@@ -2919,6 +2947,52 @@ def cameras_cmd(cfg: dict, watch: bool) -> int:
             time.sleep(1)
     except KeyboardInterrupt:
         return 0
+
+
+async def pair_device(name: str, pin_file: Optional[str]) -> int:
+    """AirPlay pairing: the device shows a 4-digit PIN; enter it (or write it to
+    --pin-file). Credentials are saved for playback; pairing is needed once."""
+    import pyatv
+    from pyatv.const import Protocol
+
+    loop = asyncio.get_running_loop()
+    devices = await find_devices([name])
+    conf = devices.get(name)
+    if conf is None:
+        print("device %r not found" % name, file=sys.stderr)
+        return 1
+    pairing = await pyatv.pair(conf, Protocol.AirPlay, loop, name="Jarvis")
+    try:
+        await pairing.begin()
+        print("A PIN is now shown on %s." % name, flush=True)
+        if pin_file:
+            path = Path(pin_file)
+            print("Waiting up to 10 minutes for the PIN in %s ..." % path, flush=True)
+            for _ in range(600):
+                if path.exists() and path.read_text().strip():
+                    break
+                await asyncio.sleep(1)
+            pin = path.read_text().strip() if path.exists() else ""
+        else:
+            pin = (await loop.run_in_executor(None, input, "PIN: ")).strip()
+        if not pin.isdigit():
+            print("no valid PIN entered", file=sys.stderr)
+            return 1
+        pairing.pin(int(pin))
+        await pairing.finish()
+        if not pairing.has_paired:
+            print("pairing failed (wrong PIN?)", file=sys.stderr)
+            return 1
+        creds = load_airplay_credentials()
+        creds[conf.identifier] = pairing.service.credentials
+        creds[name] = pairing.service.credentials
+        CREDENTIALS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        CREDENTIALS_FILE.write_text(json.dumps(creds, indent=1))
+        os.chmod(CREDENTIALS_FILE, 0o600)
+        print("Paired with %s; credentials saved." % name)
+        return 0
+    finally:
+        await pairing.close()
 
 
 async def list_devices() -> None:
