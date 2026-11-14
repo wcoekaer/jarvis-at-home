@@ -30,7 +30,7 @@ let watchedTypes: Set<String> = [
     HMCharacteristicTypeCarbonDioxideDetected,
 ]
 
-final class HomeBridge: NSObject, ObservableObject, HMHomeManagerDelegate, HMAccessoryDelegate {
+final class HomeBridge: NSObject, ObservableObject, HMHomeManagerDelegate, HMHomeDelegate, HMAccessoryDelegate {
     @Published var status = "Starting…"
     @Published var accessoryCount = 0
     @Published var lastEvent = ""
@@ -41,6 +41,12 @@ final class HomeBridge: NSObject, ObservableObject, HMHomeManagerDelegate, HMAcc
     private let iso = ISO8601DateFormatter()
     private var subscribed = Set<UUID>()   // characteristics already set up
     private var observedAt: [UUID: Date] = [:]
+    // Last value published per characteristic, and when. HomeKit re-sends
+    // unchanged values in bursts (bridge reconnects, hub changes); those must
+    // not become events (they'd replay alerts) or flood MQTT.
+    private var lastPublished: [UUID: (value: String, at: Date)] = [:]
+    private var lastReachable: [UUID: Bool] = [:]
+    private let unchangedRepublish: TimeInterval = 600
 
     init(mqtt: MQTTClient) {
         self.mqtt = mqtt
@@ -57,37 +63,98 @@ final class HomeBridge: NSObject, ObservableObject, HMHomeManagerDelegate, HMAcc
 
     func homeManagerDidUpdateHomes(_ manager: HMHomeManager) {
         // Can be called repeatedly; only new characteristics are set up.
-        var count = 0, watched = 0
+        var count = 0
         for home in manager.homes {
+            home.delegate = self  // learn about accessories added, removed, moved, renamed
             for accessory in home.accessories {
-                accessory.delegate = self
+                setUp(accessory)
                 count += 1
-                for ch in watchedCharacteristics(accessory) {
-                    watched += 1
-                    guard !subscribed.contains(ch.uniqueIdentifier) else { continue }
-                    subscribed.insert(ch.uniqueIdentifier)
-                    if ch.properties.contains(HMCharacteristicPropertySupportsEventNotification) {
-                        ch.enableNotification(true) { _ in }
-                    }
-                    // One read per characteristic, at startup only.
-                    if ch.properties.contains(HMCharacteristicPropertyReadable) {
-                        ch.readValue { [weak self] error in
-                            if error == nil {
-                                self?.observedAt[ch.uniqueIdentifier] = Date()
-                                self?.publish(ch, event: false)
-                            }
-                        }
-                    }
-                }
             }
         }
         accessoryCount = count
-        status = "Watching \(watched) values on \(count) accessories in \(manager.homes.count) home(s)"
+        status = "Watching \(subscribed.count) values on \(count) accessories in \(manager.homes.count) home(s)"
         if snapshotTimer == nil {
             snapshotTimer = Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { [weak self] _ in
                 self?.republishCached()
             }
         }
+        scheduleInventory()
+    }
+
+    /// Subscribe to an accessory's watched characteristics and read each once.
+    private func setUp(_ accessory: HMAccessory) {
+        accessory.delegate = self
+        for ch in watchedCharacteristics(accessory) {
+            guard !subscribed.contains(ch.uniqueIdentifier) else { continue }
+            subscribed.insert(ch.uniqueIdentifier)
+            if ch.properties.contains(HMCharacteristicPropertySupportsEventNotification) {
+                ch.enableNotification(true) { _ in }
+            }
+            // One read per characteristic, when it is first seen.
+            if ch.properties.contains(HMCharacteristicPropertyReadable) {
+                ch.readValue { [weak self] error in
+                    if error == nil {
+                        self?.observedAt[ch.uniqueIdentifier] = Date()
+                        self?.publish(ch, event: false)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: HMHomeDelegate: keep the published picture in step with Home.
+
+    func home(_ home: HMHome, didAdd accessory: HMAccessory) {
+        setUp(accessory)
+        publishReachability(accessory)
+        accessoryCount += 1
+        scheduleInventory()
+    }
+
+    func home(_ home: HMHome, didRemove accessory: HMAccessory) {
+        accessoryCount = max(0, accessoryCount - 1)
+        scheduleInventory()  // Jarvis clears the removed accessory's topics
+    }
+
+    func home(_ home: HMHome, didUpdate room: HMRoom, for accessory: HMAccessory) {
+        republish(accessory)  // topics include the room
+        scheduleInventory()
+    }
+
+    func accessoryDidUpdateName(_ accessory: HMAccessory) {
+        republish(accessory)  // topics include the name
+        scheduleInventory()
+    }
+
+    private func republish(_ accessory: HMAccessory) {
+        publishReachability(accessory)
+        for ch in watchedCharacteristics(accessory) where ch.value != nil {
+            publish(ch, event: false)
+        }
+    }
+
+    /// Retained list of every accessory that currently exists, as
+    /// "home/room/accessory" (the topic prefix). Jarvis uses it to drop
+    /// topics of accessories that were removed, renamed or moved.
+    private var inventoryWork: DispatchWorkItem?
+
+    private func scheduleInventory() {
+        inventoryWork?.cancel()  // coalesce bursts of changes
+        let work = DispatchWorkItem { [weak self] in self?.publishInventory() }
+        inventoryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: work)
+    }
+
+    private func publishInventory() {
+        var list: [String] = []
+        for home in manager.homes {
+            for accessory in home.accessories {
+                list.append([home.name, accessory.room?.name ?? "Default Room", accessory.name].map(clean).joined(separator: "/"))
+            }
+        }
+        let body: [String: Any] = ["ts": iso.string(from: Date()), "homes": manager.homes.map { clean($0.name) },
+                                   "accessories": list.sorted()]
+        mqtt.publish("homekit/inventory", json(body), retain: true)
     }
 
     private func watchedCharacteristics(_ accessory: HMAccessory) -> [HMCharacteristic] {
@@ -101,22 +168,34 @@ final class HomeBridge: NSObject, ObservableObject, HMHomeManagerDelegate, HMAcc
     private func republishCached() {
         for home in manager.homes {
             for accessory in home.accessories {
-                publishReachability(accessory)
-                for ch in watchedCharacteristics(accessory) where ch.value != nil {
-                    publish(ch, event: false)
-                }
+                republish(accessory)
             }
         }
+        publishInventory()
     }
 
     func accessory(_ accessory: HMAccessory, service: HMService, didUpdateValueFor characteristic: HMCharacteristic) {
         guard watchedTypes.contains(characteristic.characteristicType) else { return }
-        observedAt[characteristic.uniqueIdentifier] = Date()
+        let id = characteristic.uniqueIdentifier
+        observedAt[id] = Date()  // a repeat still proves the device is alive
+        if let last = lastPublished[id], last.value == valueKey(characteristic.value) {
+            // Unchanged: no event; refresh the retained state only occasionally.
+            if Date().timeIntervalSince(last.at) >= unchangedRepublish {
+                publish(characteristic, event: false)
+            }
+            return
+        }
         publish(characteristic, event: true)
     }
 
     func accessoryDidUpdateReachability(_ accessory: HMAccessory) {
+        guard lastReachable[accessory.uniqueIdentifier] != accessory.isReachable else { return }
         publishReachability(accessory)
+    }
+
+    private func valueKey(_ value: Any?) -> String {
+        guard let value else { return "nil" }
+        return String(describing: value)
     }
 
     private func publishReachability(_ accessory: HMAccessory) {
@@ -127,6 +206,7 @@ final class HomeBridge: NSObject, ObservableObject, HMHomeManagerDelegate, HMAcc
                                    "characteristic": "Reachable", "value": accessory.isReachable,
                                    "ts": iso.string(from: Date())]
         mqtt.publish(topic, json(body), retain: true)
+        lastReachable[accessory.uniqueIdentifier] = accessory.isReachable
     }
 
     private func publish(_ ch: HMCharacteristic, event: Bool) {
@@ -144,6 +224,7 @@ final class HomeBridge: NSObject, ObservableObject, HMHomeManagerDelegate, HMAcc
             .map(clean).joined(separator: "/")
         let payload = json(body)
         mqtt.publish(topic, payload, retain: true)
+        lastPublished[ch.uniqueIdentifier] = (valueKey(value), Date())
         if event {
             mqtt.publish("homekit/events", payload)
             DispatchQueue.main.async { self.lastEvent = "\(accessory.name): \(name) = \(body["text"] ?? value)" }
@@ -198,7 +279,7 @@ final class HomeBridge: NSObject, ObservableObject, HMHomeManagerDelegate, HMAcc
 
     private func json(_ obj: [String: Any]) -> String {
         let safe = obj.mapValues { v -> Any in
-            if v is NSNumber || v is String || v is Bool { return v }
+            if v is NSNumber || v is String || v is Bool || v is [String] { return v }
             return String(describing: v)
         }
         let data = (try? JSONSerialization.data(withJSONObject: safe, options: [.sortedKeys])) ?? Data()

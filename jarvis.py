@@ -419,6 +419,13 @@ class MqttState:
     def _on_message(self, client, userdata, msg):
         payload = msg.payload.decode("utf-8", "replace").strip()
         now = dt.datetime.now()
+        if msg.topic.startswith("homekit/") and not payload:
+            # an empty retained message deletes the topic (see prune_homekit)
+            with self.lock:
+                self.values.pop(msg.topic, None)
+            return
+        if msg.topic == "homekit/inventory":
+            self.prune_homekit(payload)
         data, observed, reachable = self.observation(payload, now, bool(msg.retain))
         if CONDITIONS and any(topic_matches(p, msg.topic) for p in self.condition_topics):
             with JOURNAL.lock:
@@ -575,6 +582,36 @@ class MqttState:
             with self.lock:
                 lines = self.internet.summary(now) + lines
         return "\n".join(lines[:int(self.cfg.get("max_lines", 100))])
+
+    def prune_homekit(self, payload: str) -> None:
+        """The JarvisHome bridge publishes the accessories that currently exist
+        in Home. Forget, and clear from the broker, retained topics of
+        accessories that were removed, renamed or moved since."""
+        try:
+            inv = json.loads(payload)
+            current = set(inv["accessories"])
+            homes = set(inv.get("homes") or [a.split("/")[0] for a in current])
+        except (ValueError, KeyError, TypeError):
+            return
+        if len(current) < int(self.cfg.get("homekit_inventory_min", 10)):
+            log.warning("HomeKit inventory has only %d accessories; not pruning", len(current))
+            return  # e.g. HomeKit not loaded yet: never wipe everything
+        stale = []
+        with self.lock:
+            for topic in list(self.values):
+                parts = topic.split("/")
+                if (topic.startswith("homekit/") and len(parts) >= 5 and parts[1] in homes
+                        and "/".join(parts[1:4]) not in current):
+                    stale.append(topic)
+                    self.values.pop(topic, None)
+        if not stale:
+            return
+        accessories = sorted({"/".join(t.split("/")[2:4]) for t in stale})
+        log.info("HomeKit: %d accessory(ies) no longer in Home; cleared %d topics: %s",
+                 len(accessories), len(stale), ", ".join(accessories[:12]) + (" ..." if len(accessories) > 12 else ""))
+        if self.client is not None:
+            for topic in stale:
+                self.client.publish(topic, b"", retain=True)  # empty retained message deletes it
 
     def publisher_alive(self, topic: str, values: dict) -> bool:
         """For retained state topics like /unifi/protect/<mac>/availability, the
@@ -2646,10 +2683,25 @@ async def scheduler(cfg: dict) -> None:
         hud_task.add_done_callback(lambda t: t.cancelled() or t.exception() and
                                    log.error("HUD stopped: %r", t.exception()))
     if (cfg.get("homekit") or {}).get("enabled"):
-        try:
-            await start_homekit(cfg)
-        except Exception:
-            log.exception("HomeKit accessory failed to start")
+        # At boot the LaunchDaemon can start before the network is up, and the
+        # HomeKit accessory needs it (local address, mDNS). Keep retrying in the
+        # background instead of giving up after one attempt.
+        async def homekit_with_retry() -> None:
+            delay = 10
+            while True:
+                try:
+                    await start_homekit(cfg)
+                    return
+                except OSError as e:
+                    log.warning("HomeKit accessory not started yet (%s); retrying in %ds", e, delay)
+                except Exception:
+                    log.exception("HomeKit accessory failed to start; retrying in %ds", delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 300)
+
+        hk_task = asyncio.create_task(homekit_with_retry())
+        hk_task.add_done_callback(lambda t: t.cancelled() or t.exception() and
+                                  log.error("HomeKit accessory stopped: %r", t.exception()))
     maintenance_task = asyncio.create_task(maintenance(cfg, alerter))
     maintenance_task.add_done_callback(lambda t: t.cancelled() or t.exception() and
                                         log.error('maintenance stopped: %r', t.exception()))
